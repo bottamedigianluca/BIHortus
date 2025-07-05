@@ -105,31 +105,42 @@ router.get('/active', async (req, res) => {
   }
 });
 
-// Get passive invoices (incoming)
+// Get passive invoices (incoming) - CORRETTE CON DATI REALI
 router.get('/passive', async (req, res) => {
   try {
     const { page = 1, limit = 100, status, supplier, dateFrom, dateTo } = req.query;
     
     logger.info('📋 Fetching passive invoices from ARCA database');
     
+    if (!arcaService.isConnected) {
+      return res.json({ success: true, data: [] });
+    }
+
+    // Uso lo scadenzario SC per trovare debiti verso fornitori (importi negativi)
     let query = `
-      SELECT 
-        DOTes.Numero_documento as numeroDocumento,
-        DOTes.Data_documento as dataDocumento,
-        DOTes.Data_scadenza as scadenza,
-        DOTes.Tipo_documento as tipoDocumento,
-        DOTes.Totale_documento as totaleDocumento,
-        DOTes.Stato_documento as statoDocumento,
-        DOTes.Cd_CF as codiceFornitore,
-        CF.Descrizione as supplierName,
-        DOTes.Note,
-        DOTes.Data_ins as dataInserimento,
-        DOTes.Importo_iva as importoIva,
-        DOTes.Imponibile
-      FROM DOTes
-      INNER JOIN CF ON DOTes.Cd_CF = CF.Cd_CF
-      WHERE DOTes.Tipo_documento IN ('FAC', 'FTC', 'DDT')
-        AND CF.Fornitore = 1
+      SELECT TOP ${limit}
+        sc.Id_SC,
+        sc.NumFattura as numeroDocumento,
+        sc.DataFattura as dataDocumento,
+        sc.DataScadenza as scadenza,
+        'Fattura Passiva' as tipoDocumento,
+        ABS(sc.ImportoE) as totaleDocumento,
+        ABS(sc.ImportoV) as totaleValuta,
+        sc.Cd_CF as codiceFornitore,
+        cf.Descrizione as supplierName,
+        sc.Descrizione as Note,
+        CASE 
+          WHEN sc.Pagata = 1 THEN 'Pagata'
+          WHEN sc.DataScadenza < GETDATE() THEN 'Scaduta'
+          WHEN sc.DataScadenza <= DATEADD(day, 7, GETDATE()) THEN 'In Scadenza'
+          ELSE 'Da Pagare'
+        END as statoDocumento,
+        DATEDIFF(day, GETDATE(), sc.DataScadenza) as giorniScadenza
+      FROM SC sc
+      INNER JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
+      WHERE sc.ImportoE < 0
+        AND cf.Descrizione IS NOT NULL
+        AND cf.Descrizione != ''
     `;
     
     const params = [];

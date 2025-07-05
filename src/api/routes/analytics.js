@@ -26,7 +26,13 @@ router.get('/kpis', async (req, res) => {
       });
     }
 
-    // Fatturato totale periodo corrente - usando documenti reali
+    // Logica corretta: DDT per mese corrente, Fatture per mesi passati
+    const currentDate = new Date();
+    const isCurrentMonth = startDate.getMonth() === currentDate.getMonth() && 
+                          startDate.getFullYear() === currentDate.getFullYear();
+    
+    const docTypes = isCurrentMonth ? ['B'] : ['F']; // B=DDT corrente, F=Fatture passate
+    
     const currentRevenueQuery = `
       SELECT 
         ISNULL(SUM(dt.TotDocumentoE), 0) as totalRevenue,
@@ -34,11 +40,14 @@ router.get('/kpis', async (req, res) => {
         COUNT(DISTINCT tes.Cd_CF) as customerCount
       FROM DOTotali dt
       INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
-      WHERE tes.TipoDocumento IN ('F', 'B')
+      WHERE tes.DataDoc >= @startDate
+        AND tes.TipoDocumento IN ('${docTypes.join("','")}')
+        AND tes.CliFor = 'C'
         AND dt.TotDocumentoE > 0
     `;
     
     const currentResult = await arcaService.pool.request()
+      .input('startDate', startDate)
       .query(currentRevenueQuery);
     
     console.log('Current result:', currentResult.recordset[0]);
@@ -53,7 +62,7 @@ router.get('/kpis', async (req, res) => {
         COUNT(DISTINCT tes.Id_DoTes) as orderCount
       FROM DOTotali dt
       INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
-      WHERE tes.DataDoc >= ? AND tes.DataDoc < ?
+      WHERE tes.DataDoc >= @startDate AND tes.DataDoc < ?
         AND tes.TipoDocumento IN ('F', 'B')
         AND dt.TotDocumentoE > 0
     `;
@@ -137,15 +146,37 @@ router.get('/categories', async (req, res) => {
 
     const query = `
       SELECT 
-        'Frutta e Verdura' as name,
-        SUM(sc.ImportoE) as value,
-        COUNT(sc.Id_SC) as orders,
-        25.0 as margin
-      FROM SC sc
-      WHERE sc.ImportoE > 0
+        CASE 
+          WHEN ar.Descrizione LIKE '%AGLIO%' OR ar.Descrizione LIKE '%CIPOLLA%' THEN 'Bulbi e Radici'
+          WHEN ar.Descrizione LIKE '%ALBICOCCH%' OR ar.Descrizione LIKE '%PESC%' OR ar.Descrizione LIKE '%MELA%' THEN 'Frutta Fresca'
+          WHEN ar.Descrizione LIKE '%POMODOR%' OR ar.Descrizione LIKE '%INSALAT%' THEN 'Ortaggi da Foglia'
+          WHEN ar.Descrizione LIKE '%ZUCCH%' OR ar.Descrizione LIKE '%MELANZ%' THEN 'Ortaggi da Frutto'
+          ELSE 'Altri Prodotti'
+        END as name,
+        SUM(dr.ImportoE) as value,
+        COUNT(DISTINCT dr.Id_DOTes) as orders,
+        AVG(CASE WHEN ar.CostoStandard > 0 AND dr.PrezzoU > 0 
+            THEN ((dr.PrezzoU - ar.CostoStandard) / dr.PrezzoU * 100) 
+            ELSE 25.0 END) as margin
+      FROM DORig dr
+      INNER JOIN DOTes tes ON dr.Id_DOTes = tes.Id_DOTes
+      INNER JOIN AR ar ON dr.Cd_AR = ar.Cd_AR
+      WHERE tes.DataDoc >= @startDate
+        AND tes.TipoDocumento IN ('F', 'B')
+        AND tes.CliFor = 'C'
+        AND dr.ImportoE > 0
+      GROUP BY CASE 
+          WHEN ar.Descrizione LIKE '%AGLIO%' OR ar.Descrizione LIKE '%CIPOLLA%' THEN 'Bulbi e Radici'
+          WHEN ar.Descrizione LIKE '%ALBICOCCH%' OR ar.Descrizione LIKE '%PESC%' OR ar.Descrizione LIKE '%MELA%' THEN 'Frutta Fresca'
+          WHEN ar.Descrizione LIKE '%POMODOR%' OR ar.Descrizione LIKE '%INSALAT%' THEN 'Ortaggi da Foglia'
+          WHEN ar.Descrizione LIKE '%ZUCCH%' OR ar.Descrizione LIKE '%MELANZ%' THEN 'Ortaggi da Frutto'
+          ELSE 'Altri Prodotti'
+        END
+      ORDER BY SUM(dr.ImportoE) DESC
     `;
     
     const result = await arcaService.pool.request()
+      .input('startDate', startDate)
       .query(query);
 
     console.log('Categories query result:', result.recordset);
@@ -184,16 +215,23 @@ router.get('/products', async (req, res) => {
 
     const query = `
       SELECT TOP 10
-        cf.Descrizione as name,
-        SUM(sc.ImportoE) as revenue,
-        COUNT(sc.Id_SC) as units,
-        25.0 as margin
-      FROM SC sc
-      INNER JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
-      WHERE sc.DataScadenza >= ?
-        AND sc.ImportoE > 0
-      GROUP BY cf.Cd_CF, cf.Descrizione
-      ORDER BY SUM(sc.ImportoE) DESC
+        ar.Descrizione as name,
+        SUM(dr.ImportoE) as revenue,
+        SUM(dr.Qta) as units,
+        AVG(CASE WHEN ar.CostoStandard > 0 AND dr.PrezzoU > 0 
+            THEN ((dr.PrezzoU - ar.CostoStandard) / dr.PrezzoU * 100) 
+            ELSE 25.0 END) as margin
+      FROM DORig dr
+      INNER JOIN DOTes tes ON dr.Id_DOTes = tes.Id_DOTes
+      INNER JOIN AR ar ON dr.Cd_AR = ar.Cd_AR
+      WHERE tes.DataDoc >= @startDate
+        AND tes.TipoDocumento IN ('F', 'B')
+        AND tes.CliFor = 'C'
+        AND dr.ImportoE > 0
+        AND ar.Descrizione IS NOT NULL
+        AND ar.Descrizione != ''
+      GROUP BY ar.Cd_AR, ar.Descrizione
+      ORDER BY SUM(dr.ImportoE) DESC
     `;
     
     const result = await arcaService.pool.request()
@@ -232,15 +270,34 @@ router.get('/customers', async (req, res) => {
 
     const query = `
       SELECT 
-        'Clienti Attivi' as segment,
+        CASE 
+          WHEN cf.Descrizione LIKE '%RISTORANTE%' OR cf.Descrizione LIKE '%TRATTORIA%' OR cf.Descrizione LIKE '%PIZZERIA%' THEN 'Ristoranti'
+          WHEN cf.Descrizione LIKE '%ALBERGO%' OR cf.Descrizione LIKE '%HOTEL%' THEN 'Alberghi'
+          WHEN cf.Descrizione LIKE '%BAR%' THEN 'Bar e Caffetterie'
+          WHEN cf.Descrizione LIKE '%FRUTTA%' OR cf.Descrizione LIKE '%VERDURA%' THEN 'Rivenditori F&V'
+          ELSE 'Altri Clienti'
+        END as segment,
         COUNT(DISTINCT cf.Cd_CF) as count,
-        SUM(sc.ImportoE) as revenue,
+        SUM(dt.TotDocumentoE) as revenue,
         0 as growth,
-        AVG(sc.ImportoE) as avgOrder
-      FROM SC sc
-      INNER JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
-      WHERE sc.DataScadenza >= ?
-        AND sc.ImportoE > 0
+        AVG(dt.TotDocumentoE) as avgOrder
+      FROM DOTotali dt
+      INNER JOIN DOTes tes ON dt.Id_DOTes = tes.Id_DOTes
+      INNER JOIN CF cf ON tes.Cd_CF = cf.Cd_CF
+      WHERE tes.DataDoc >= @startDate
+        AND tes.TipoDocumento IN ('F', 'B')
+        AND tes.CliFor = 'C'
+        AND dt.TotDocumentoE > 0
+        AND cf.Descrizione IS NOT NULL
+        AND cf.Descrizione != ''
+      GROUP BY CASE 
+          WHEN cf.Descrizione LIKE '%RISTORANTE%' OR cf.Descrizione LIKE '%TRATTORIA%' OR cf.Descrizione LIKE '%PIZZERIA%' THEN 'Ristoranti'
+          WHEN cf.Descrizione LIKE '%ALBERGO%' OR cf.Descrizione LIKE '%HOTEL%' THEN 'Alberghi'
+          WHEN cf.Descrizione LIKE '%BAR%' THEN 'Bar e Caffetterie'
+          WHEN cf.Descrizione LIKE '%FRUTTA%' OR cf.Descrizione LIKE '%VERDURA%' THEN 'Rivenditori F&V'
+          ELSE 'Altri Clienti'
+        END
+      ORDER BY SUM(dt.TotDocumentoE) DESC
     `;
     
     const result = await arcaService.pool.request()
