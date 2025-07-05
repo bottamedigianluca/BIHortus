@@ -1,0 +1,1340 @@
+# Guida Completa Database Arca Evolution
+## Manuale Tecnico per Automazioni e Integrazioni
+
+*Versione: 2025.1 | Database: ADB_BOTTAMEDI | Sistema: Arca Evolution*
+
+---
+
+## 📋 INDICE
+
+1. [Panoramica Generale](#panoramica-generale)
+2. [Architettura Database](#architettura-database)
+3. [Tabelle Core Business](#tabelle-core-business)
+4. [Relazioni Chiave](#relazioni-chiave)
+5. [Query Templates](#query-templates)
+6. [Automazioni Standard](#automazioni-standard)
+7. [Best Practices](#best-practices)
+
+---
+
+## 🏗️ PANORAMICA GENERALE
+
+### Informazioni Sistema
+- **Database**: ADB_BOTTAMEDI (SQL Server)
+- **Azienda**: Bottamedi
+- **Tipo Sistema**: ERP Completo (Gestionale + Contabilità + Magazzino)
+- **Moduli Attivi**: Vendite, Acquisti, Magazzino, Contabilità, CRM, Produzione
+
+### Convenzioni Naming
+- **Tabelle**: PascalCase (es. `DOTes`, `MGMov`)
+- **Campi**: Prefisso tabella + underscore (es. `Cd_AR`, `Id_DOTes`)
+- **Chiavi**: `Id_[Tabella]` per primary key, `Cd_[Entità]` per codici business
+- **Date**: `Data[Evento]` o `Dt[Abbreviazione]`
+- **Importi**: Suffisso E/V per Euro/Valuta
+
+---
+
+## 🗄️ ARCHITETTURA DATABASE
+
+### Schema Logico Principale
+
+```
+ANAGRAFICHE           DOCUMENTI              MOVIMENTI
+    AR ←→ LSArticolo      DOTes ←→ DORig        MGMov
+    CF ←→ CFDest          CGMovT ←→ CGMovR      SCMovimenti  
+    Agente                SC (Scadenze)        Provvigione
+    
+CONFIGURAZIONE        REPORTING              CONTABILITÀ
+    VL (Valute)          Report                CGConto
+    LS (Listini)         DataView              CGCausale
+    Aliquota             Widget                CGEsercizio
+```
+
+---
+
+## 📊 TABELLE CORE BUSINESS
+
+### 🏷️ **AR - ARTICOLI/PRODOTTI**
+
+**Descrizione**: Anagrafica completa di tutti gli articoli gestiti
+
+**Campi Principali**:
+```sql
+Id_AR              int           -- Chiave primaria
+Cd_AR              varchar(20)   -- Codice articolo (BUSINESS KEY)
+Descrizione        varchar(80)   -- Descrizione articolo
+DescrizioneBreve   varchar(40)   -- Descrizione breve
+PrezzoVendita      numeric       -- Prezzo base di vendita
+CostoStandard      numeric       -- Costo standard
+ScortaMinima       numeric       -- Soglia riordino
+ScortaMassima      numeric       -- Giacenza massima
+Cd_ARMisura        char(2)       -- Unità di misura principale
+Cd_ARGruppo1       char(3)       -- Gruppo merceologico livello 1
+Cd_ARGruppo2       char(3)       -- Gruppo merceologico livello 2  
+Cd_ARGruppo3       char(3)       -- Gruppo merceologico livello 3
+Cd_Aliquota_V      char(3)       -- Aliquota IVA vendita
+Cd_Aliquota_A      char(3)       -- Aliquota IVA acquisto
+Obsoleto           bit           -- Flag articolo dismesso
+Fittizio           bit           -- Flag articolo fittizio
+WebB2CPubblica     bit           -- Pubblicato su e-commerce B2C
+WebB2BPubblica     bit           -- Pubblicato su e-commerce B2B
+```
+
+**Relazioni**:
+- `AR.Cd_ARMisura → ARMisura.Cd_ARMisura` (Unità misura)
+- `AR.Cd_ARGruppo1/2/3 → ARGruppo1/2/3` (Classificazione)
+- `AR.Cd_Aliquota_V/A → Aliquota.Cd_Aliquota` (IVA)
+
+**Query Utilità**:
+```sql
+-- Articoli sotto scorta
+SELECT Cd_AR, Descrizione, ScortaMinima, 
+       (SELECT SUM(QuantitaSign) FROM MGMov WHERE Cd_AR = AR.Cd_AR) as Giacenza
+FROM AR 
+WHERE ScortaMinima > 0
+HAVING (SELECT SUM(QuantitaSign) FROM MGMov WHERE Cd_AR = AR.Cd_AR) <= ScortaMinima
+
+-- Top 10 articoli per fatturato ultimo mese
+SELECT TOP 10 ar.Cd_AR, ar.Descrizione, SUM(dr.PrezzoTotaleE) as Fatturato
+FROM AR ar
+JOIN DORig dr ON ar.Cd_AR = dr.Cd_AR
+JOIN DOTes dt ON dr.Id_DOTes = dt.Id_DoTes
+WHERE dt.DataDoc >= DATEADD(month, -1, GETDATE())
+AND dt.TipoDocumento = 'F'
+GROUP BY ar.Cd_AR, ar.Descrizione
+ORDER BY Fatturato DESC
+```
+
+---
+
+### 👥 **CF - CLIENTI/FORNITORI**
+
+**Descrizione**: Anagrafica unificata di clienti, fornitori e contatti
+
+**Campi Principali**:
+```sql
+Id_CF              int           -- Chiave primaria
+Cd_CF              char(7)       -- Codice cliente/fornitore (BUSINESS KEY)
+Descrizione        varchar(80)   -- Ragione sociale
+Cliente            bit           -- Flag cliente
+Fornitore          bit           -- Flag fornitore
+ProspectCliente    bit           -- Flag prospect cliente
+PartitaIva         varchar(17)   -- Partita IVA
+CodiceFiscale      varchar(16)   -- Codice fiscale
+Indirizzo          varchar(80)   -- Indirizzo
+Cap                varchar(10)   -- CAP
+Localita           varchar(60)   -- Città
+Cd_Provincia       char(3)       -- Provincia
+Cd_Nazione         char(2)       -- Nazione
+Cd_CFGruppo1/2/3   char(3)       -- Classificazione cliente
+Cd_Agente_1        char(3)       -- Agente principale
+Cd_Agente_2        char(3)       -- Agente secondario
+Fido               numeric       -- Fido accordato
+Sconto             varchar(10)   -- Sconto base
+Cd_PG              char(4)       -- Condizioni pagamento
+Obsoleto           bit           -- Flag record obsoleto
+```
+
+**Relazioni**:
+- `CF.Cd_CFGruppo1/2/3 → CFGruppo1/2/3` (Classificazione)
+- `CF.Cd_Agente_1/2 → Agente.Cd_Agente` (Agenti)
+- `CF.Cd_PG → PG.Cd_PG` (Condizioni pagamento)
+
+**Tabelle Collegate**:
+- `CFDest` - Destinazioni alternative
+- `CFContatto` - Contatti cliente
+- `CFSede` - Sedi operative
+
+---
+
+### 📋 **DOTes/DORig - DOCUMENTI**
+
+**Descrizione**: Testata e righe di tutti i documenti (Ordini, DDT, Fatture)
+
+**DOTes - Testata Documento**:
+```sql
+Id_DoTes           int           -- Chiave primaria
+Cd_Do              char(3)       -- Tipo documento
+TipoDocumento      char(1)       -- O=Ordine, D=DDT, F=Fattura
+Cd_CF              char(7)       -- Cliente/Fornitore
+NumeroDoc          varchar(10)   -- Numero documento
+DataDoc            smalldatetime -- Data documento
+Esecutivo          bit           -- Flag documento esecutivo
+Contabile          bit           -- Flag documento contabilizzato
+SegnoDocumento     smallint      -- Segno documento (+1/-1)
+Cd_VL              char(3)       -- Valuta
+Cambio             numeric       -- Cambio valuta
+Cd_Agente_1        char(3)       -- Agente principale
+Cd_PG              char(4)       -- Condizioni pagamento
+DataConsegna       smalldatetime -- Data consegna
+```
+
+**DORig - Righe Documento**:
+```sql
+Id_DORig           int           -- Chiave primaria
+Id_DOTes           int           -- Link testata
+Cd_AR              varchar(20)   -- Articolo
+Descrizione        varchar(80)   -- Descrizione riga
+Qta                numeric       -- Quantità
+PrezzoUnitarioV    numeric       -- Prezzo unitario in valuta
+ScontoRiga         varchar(20)   -- Sconto riga
+PrezzoTotaleV      numeric       -- Totale riga in valuta
+PrezzoTotaleE      numeric       -- Totale riga in euro
+Omaggio            tinyint       -- Tipo omaggio (0=No, 1=Merce, 2=IVA)
+Evasa              bit           -- Flag riga evasa
+QtaEvasa           numeric       -- Quantità evasa
+DataConsegna       smalldatetime -- Data consegna riga
+```
+
+**Query Fondamentali**:
+```sql
+-- Ordini aperti (non completamente evasi)
+SELECT dt.NumeroDoc, dt.DataDoc, cf.Descrizione as Cliente,
+       dr.Cd_AR, dr.Qta, dr.QtaEvasa, (dr.Qta - dr.QtaEvasa) as DaEvadere
+FROM DOTes dt
+JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+WHERE dt.TipoDocumento = 'O' 
+AND dr.Evasa = 0
+AND dr.Qta > dr.QtaEvasa
+
+-- Fatturato mensile per agente
+SELECT ag.Descrizione as Agente, 
+       SUM(tot.TotDocumentoE) as Fatturato,
+       COUNT(dt.Id_DoTes) as NumFatture
+FROM DOTes dt
+JOIN DOTotali tot ON dt.Id_DoTes = tot.Id_DoTes
+JOIN Agente ag ON dt.Cd_Agente_1 = ag.Cd_Agente
+WHERE dt.TipoDocumento = 'F'
+AND YEAR(dt.DataDoc) = YEAR(GETDATE())
+AND MONTH(dt.DataDoc) = MONTH(GETDATE())
+GROUP BY ag.Descrizione
+```
+
+---
+
+### 📦 **MGMov - MOVIMENTI MAGAZZINO**
+
+**Descrizione**: Tutti i movimenti di magazzino (carichi/scarichi)
+
+**Campi Principali**:
+```sql
+Id_MGMov           int           -- Chiave primaria
+DataMov            smalldatetime -- Data movimento
+Cd_AR              varchar(20)   -- Articolo
+Cd_MG              char(5)       -- Magazzino
+Cd_MGUbicazione    varchar(20)   -- Ubicazione
+Cd_ARLotto         varchar(20)   -- Lotto
+Quantita           numeric       -- Quantità movimento
+QuantitaSign       numeric       -- Quantità con segno
+Valore             numeric       -- Valore movimento
+ValoreSign         numeric       -- Valore con segno
+Cd_MGCausale       char(3)       -- Causale movimento
+PartenzaArrivo     char(1)       -- P=Partenza, A=Arrivo
+PadreComponente    char(1)       -- P=Padre, C=Componente
+Sign               smallint      -- Segno movimento
+CarA/CarP/CarT     smallint      -- Carichi (Attuale/Progressivo/Totale)
+ScaV/ScaP/ScaT     smallint      -- Scarichi (Vendita/Progressivo/Totale)
+```
+
+**Query Giacenze**:
+```sql
+-- Giacenza attuale per articolo e magazzino
+SELECT Cd_AR, Cd_MG, 
+       SUM(QuantitaSign) as Giacenza,
+       SUM(ValoreSign) as ValoreGiacenza
+FROM MGMov
+WHERE DataMov <= GETDATE()
+GROUP BY Cd_AR, Cd_MG
+HAVING SUM(QuantitaSign) <> 0
+
+-- Movimenti articolo ultimo mese
+SELECT DataMov, Cd_MGCausale, QuantitaSign, ValoreSign,
+       SUM(QuantitaSign) OVER (ORDER BY DataMov) as ProgressivoQta
+FROM MGMov
+WHERE Cd_AR = 'ARTICOLO001'
+AND DataMov >= DATEADD(month, -1, GETDATE())
+ORDER BY DataMov
+```
+
+---
+
+### 💰 **SC - SCADENZARIO**
+
+**Descrizione**: Gestione scadenze clienti e fornitori
+
+**Campi Principali**:
+```sql
+Id_SC              int           -- Chiave primaria
+Cd_CF              char(7)       -- Cliente/Fornitore
+DataScadenza       smalldatetime -- Data scadenza
+DataPagamento      smalldatetime -- Data pagamento effettivo
+ImportoE           numeric       -- Importo in euro
+ImportoV           numeric       -- Importo in valuta
+TipoRata           char(1)       -- Tipo rata
+Pagata             bit           -- Flag pagata
+Emessa             bit           -- Flag emessa
+Insoluta           bit           -- Flag insoluta
+NumFattura         varchar(20)   -- Numero fattura origine
+Descrizione        varchar(80)   -- Descrizione
+```
+
+**Query Scadenze**:
+```sql
+-- Scaduto per cliente
+SELECT cf.Descrizione, 
+       SUM(CASE WHEN sc.DataScadenza < GETDATE() THEN sc.ImportoE ELSE 0 END) as Scaduto,
+       SUM(CASE WHEN sc.DataScadenza >= GETDATE() THEN sc.ImportoE ELSE 0 END) as ADScadere
+FROM SC sc
+JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
+WHERE sc.Pagata = 0
+GROUP BY cf.Descrizione
+HAVING SUM(sc.ImportoE) > 0
+
+-- Scadenze prossime 7 giorni
+SELECT cf.Descrizione, sc.DataScadenza, sc.ImportoE, sc.NumFattura
+FROM SC sc
+JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
+WHERE sc.Pagata = 0
+AND sc.DataScadenza BETWEEN GETDATE() AND DATEADD(day, 7, GETDATE())
+ORDER BY sc.DataScadenza
+```
+
+---
+
+### 💳 **CGMovT/CGMovR - CONTABILITÀ GENERALE**
+
+**Descrizione**: Movimenti contabili (testata e righe)
+
+**CGMovT - Testata Movimento**:
+```sql
+Id_CGMovT          int           -- Chiave primaria
+DtReg              smalldatetime -- Data registrazione
+TipoMovimento      char(1)       -- Tipo movimento
+Cd_CGCausale       char(3)       -- Causale contabile
+NumRif             varchar(20)   -- Numero riferimento
+Descrizione        varchar(50)   -- Descrizione movimento
+Cd_CF              char(7)       -- Cliente/Fornitore
+ImportoE           numeric       -- Importo totale euro
+```
+
+**CGMovR - Righe Movimento**:
+```sql
+Id_CGMovR          int           -- Chiave primaria
+Id_CGMovT          int           -- Link testata
+Cd_CGConto         char(12)      -- Conto contabile
+Cd_CF              char(7)       -- Cliente/Fornitore
+DareAvere          char(1)       -- D=Dare, A=Avere
+ImportoE           numeric       -- Importo euro
+ImportoV           numeric       -- Importo valuta
+ImponibileE        numeric       -- Imponibile euro
+ImpostaE           numeric       -- Imposta euro
+Cd_Aliquota        char(3)       -- Aliquota IVA
+```
+
+---
+
+### 💰 **LS/LSArticolo - LISTINI**
+
+**Descrizione**: Gestione listini prezzi
+
+**LS - Anagrafica Listino**:
+```sql
+Id_LS              int           -- Chiave primaria
+Cd_LS              char(7)       -- Codice listino
+Descrizione        varchar(50)   -- Descrizione listino
+Cd_VL              char(3)       -- Valuta listino
+Ivato              bit           -- Prezzi IVA inclusa
+TipoLS             tinyint       -- Tipo listino
+```
+
+**LSArticolo - Prezzi Articoli**:
+```sql
+Id_LSArticolo      int           -- Chiave primaria
+Id_LSRevisione     int           -- Revisione listino
+Cd_AR              varchar(20)   -- Articolo
+Prezzo             numeric       -- Prezzo listino
+Sconto             varchar(10)   -- Sconto base
+AScaglioni         bit           -- Prezzi a scaglioni
+```
+
+---
+
+## 🔗 RELAZIONI CHIAVE
+
+### Mappa Relazioni Principali
+
+```sql
+-- DOCUMENTI → ANAGRAFICHE
+DOTes.Cd_CF → CF.Cd_CF
+DORig.Cd_AR → AR.Cd_AR
+DOTes.Cd_Agente_1 → Agente.Cd_Agente
+
+-- MAGAZZINO → ANAGRAFICHE  
+MGMov.Cd_AR → AR.Cd_AR
+MGMov.Cd_MG → MG.Cd_MG
+
+-- SCADENZARIO → DOCUMENTI
+SC.Id_CGMovT → CGMovT.Id_CGMovT
+SC.Id_DOTes → DOTes.Id_DoTes
+
+-- CONTABILITÀ → ANAGRAFICHE
+CGMovR.Cd_CGConto → CGConto.Cd_CGConto
+CGMovT.Cd_CF → CF.Cd_CF
+
+-- LISTINI → ARTICOLI
+LSArticolo.Cd_AR → AR.Cd_AR
+LSArticolo.Id_LSRevisione → LSRevisione.Id_LSRevisione
+```
+
+### Join Pattern Frequenti
+
+```sql
+-- Fatturato per cliente con dettaglio articoli
+SELECT cf.Descrizione as Cliente,
+       ar.Cd_AR, ar.Descrizione as Articolo,
+       SUM(dr.Qta) as QtaVenduta,
+       SUM(dr.PrezzoTotaleE) as Fatturato
+FROM DOTes dt
+JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+JOIN AR ar ON dr.Cd_AR = ar.Cd_AR
+WHERE dt.TipoDocumento = 'F'
+AND dt.DataDoc >= '2024-01-01'
+GROUP BY cf.Descrizione, ar.Cd_AR, ar.Descrizione
+
+-- Giacenze con valorizzazione
+SELECT ar.Cd_AR, ar.Descrizione,
+       SUM(mgm.QuantitaSign) as Giacenza,
+       SUM(mgm.ValoreSign) as ValoreGiacenza,
+       ar.CostoStandard,
+       ar.ScortaMinima
+FROM AR ar
+LEFT JOIN MGMov mgm ON ar.Cd_AR = mgm.Cd_AR
+WHERE ar.Obsoleto = 0
+GROUP BY ar.Cd_AR, ar.Descrizione, ar.CostoStandard, ar.ScortaMinima
+```
+
+---
+
+## 📝 QUERY TEMPLATES
+
+### Template Fatturato
+
+```sql
+-- TEMPLATE: Fatturato per periodo/cliente/articolo
+SELECT 
+    cf.Cd_CF,
+    cf.Descrizione as Cliente,
+    ar.Cd_AR,
+    ar.Descrizione as Articolo,
+    ag.Descrizione as Agente,
+    SUM(dr.Qta) as Quantita,
+    SUM(dr.PrezzoTotaleE) as Fatturato,
+    AVG(dr.PrezzoUnitarioV) as PrezzoMedio,
+    COUNT(DISTINCT dt.Id_DoTes) as NumeroFatture
+FROM DOTes dt
+JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+JOIN AR ar ON dr.Cd_AR = ar.Cd_AR
+LEFT JOIN Agente ag ON dt.Cd_Agente_1 = ag.Cd_Agente
+WHERE dt.TipoDocumento = 'F'
+AND dt.DataDoc BETWEEN @DataInizio AND @DataFine
+-- Filtri opzionali:
+-- AND cf.Cd_CF = @CodiceCliente
+-- AND ar.Cd_ARGruppo1 = @GruppoArticolo
+-- AND dt.Cd_Agente_1 = @CodiceAgente
+GROUP BY cf.Cd_CF, cf.Descrizione, ar.Cd_AR, ar.Descrizione, ag.Descrizione
+ORDER BY Fatturato DESC
+```
+
+### Template Giacenze
+
+```sql
+-- TEMPLATE: Situazione giacenze con allarmi
+SELECT 
+    ar.Cd_AR,
+    ar.Descrizione,
+    ar.Cd_ARGruppo1 + '.' + ar.Cd_ARGruppo2 + '.' + ar.Cd_ARGruppo3 as Gruppo,
+    mg.Descrizione as Magazzino,
+    SUM(mgm.QuantitaSign) as GiacenzaAttuale,
+    ar.ScortaMinima,
+    ar.ScortaMassima,
+    ar.CostoStandard,
+    SUM(mgm.ValoreSign) as ValoreGiacenza,
+    CASE 
+        WHEN SUM(mgm.QuantitaSign) <= ar.ScortaMinima THEN 'SOTTOSCORTA'
+        WHEN SUM(mgm.QuantitaSign) >= ar.ScortaMassima THEN 'ECCESSO'
+        ELSE 'NORMALE'
+    END as StatoGiacenza
+FROM AR ar
+LEFT JOIN MGMov mgm ON ar.Cd_AR = mgm.Cd_AR
+LEFT JOIN MG mg ON mgm.Cd_MG = mg.Cd_MG
+WHERE ar.Obsoleto = 0
+-- Filtri opzionali:
+-- AND mg.Cd_MG = @Magazzino
+-- AND ar.Cd_ARGruppo1 = @Gruppo
+GROUP BY ar.Cd_AR, ar.Descrizione, ar.Cd_ARGruppo1, ar.Cd_ARGruppo2, ar.Cd_ARGruppo3,
+         mg.Descrizione, ar.ScortaMinima, ar.ScortaMassima, ar.CostoStandard
+HAVING SUM(mgm.QuantitaSign) IS NOT NULL
+ORDER BY StatoGiacenza DESC, ar.Cd_AR
+```
+
+### Template Scadenzario
+
+```sql
+-- TEMPLATE: Analisi scadenzario completa
+SELECT 
+    cf.Cd_CF,
+    cf.Descrizione as Cliente,
+    ag.Descrizione as Agente,
+    cf.Fido,
+    SUM(CASE WHEN sc.DataScadenza < GETDATE() AND sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) as Scaduto,
+    SUM(CASE WHEN sc.DataScadenza BETWEEN GETDATE() AND DATEADD(day, 30, GETDATE()) AND sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) as Scade30gg,
+    SUM(CASE WHEN sc.DataScadenza > DATEADD(day, 30, GETDATE()) AND sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) as ScadeOltre30gg,
+    SUM(CASE WHEN sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) as TotaleEsposto,
+    CASE 
+        WHEN cf.Fido > 0 AND SUM(CASE WHEN sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) > cf.Fido THEN 'FIDO_SUPERATO'
+        WHEN SUM(CASE WHEN sc.DataScadenza < GETDATE() AND sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) > 0 THEN 'SCADUTO'
+        ELSE 'OK'
+    END as StatoCredito
+FROM CF cf
+LEFT JOIN SC sc ON cf.Cd_CF = sc.Cd_CF
+LEFT JOIN Agente ag ON cf.Cd_Agente_1 = ag.Cd_Agente
+WHERE cf.Cliente = 1
+-- Filtri opzionali:
+-- AND cf.Cd_CFGruppo1 = @GruppoCliente
+-- AND cf.Cd_Agente_1 = @Agente
+GROUP BY cf.Cd_CF, cf.Descrizione, ag.Descrizione, cf.Fido
+HAVING SUM(CASE WHEN sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) > 0
+ORDER BY StatoCredito DESC, Scaduto DESC
+```
+
+---
+
+## 🤖 AUTOMAZIONI STANDARD
+
+### 1. Alert Giacenze Critiche
+
+**Trigger**: Cron giornaliero 08:00
+**Descrizione**: Monitora articoli sotto scorta minima
+
+```sql
+-- Query alert giacenze
+SELECT 
+    ar.Cd_AR,
+    ar.Descrizione,
+    ar.ScortaMinima,
+    ISNULL(SUM(mgm.QuantitaSign), 0) as GiacenzaAttuale,
+    ar.ScortaMinima - ISNULL(SUM(mgm.QuantitaSign), 0) as Mancante,
+    CONCAT('https://arca.bottamedi.com/articolo/', ar.Cd_AR) as LinkArticolo
+FROM AR ar
+LEFT JOIN MGMov mgm ON ar.Cd_AR = mgm.Cd_AR
+WHERE ar.Obsoleto = 0 
+AND ar.ScortaMinima > 0
+GROUP BY ar.Cd_AR, ar.Descrizione, ar.ScortaMinima
+HAVING ISNULL(SUM(mgm.QuantitaSign), 0) <= ar.ScortaMinima
+ORDER BY (ar.ScortaMinima - ISNULL(SUM(mgm.QuantitaSign), 0)) DESC
+```
+
+**Email Template**:
+```html
+⚠️ ALERT GIACENZE CRITICHE - {{$today}}
+
+Buongiorno,
+sono stati rilevati {{$items_count}} articoli sotto scorta minima:
+
+{{#each items}}
+• {{Cd_AR}} - {{Descrizione}}
+  Giacenza: {{GiacenzaAttuale}} | Minima: {{ScortaMinima}} | Mancanti: {{Mancante}}
+  Link: {{LinkArticolo}}
+
+{{/each}}
+
+Procedere con riordino urgente.
+Sistema Automatico Arca Evolution
+```
+
+### 2. Aggiornamento Listini Intelligente
+
+**Trigger**: Cron settimanale lunedì 09:00
+**Descrizione**: Aggiorna prezzi basandosi su margini e concorrenza
+
+```sql
+-- Query analisi margini attuali
+SELECT 
+    ar.Cd_AR,
+    ar.Descrizione,
+    ar.CostoStandard,
+    lsa.Prezzo as PrezzoAttuale,
+    CASE 
+        WHEN ar.CostoStandard > 0 THEN 
+            ROUND(((lsa.Prezzo - ar.CostoStandard) / ar.CostoStandard) * 100, 2)
+        ELSE 0 
+    END as MarginePercentuale,
+    -- Prezzo suggerito con margine target 25%
+    ROUND(ar.CostoStandard * 1.25, 2) as PrezzoSuggerito
+FROM AR ar
+JOIN LSArticolo lsa ON ar.Cd_AR = lsa.Cd_AR
+JOIN LSRevisione lsr ON lsa.Id_LSRevisione = lsr.Id_LSRevisione
+WHERE lsr.Cd_LS = 'LIST001' -- Listino principale
+AND lsr.DaData <= GETDATE()
+AND ar.Obsoleto = 0
+AND ar.CostoStandard > 0
+```
+
+### 3. Follow-up Clienti Automatico
+
+**Trigger**: Cron settimanale venerdì 16:00
+**Descrizione**: Identifica clienti inattivi per campagne marketing
+
+```sql
+-- Query clienti inattivi
+SELECT 
+    cf.Cd_CF,
+    cf.Descrizione,
+    cf.Email,
+    ag.Descrizione as Agente,
+    ag.Email as EmailAgente,
+    MAX(dt.DataDoc) as UltimoOrdine,
+    DATEDIFF(day, MAX(dt.DataDoc), GETDATE()) as GiorniInattivita,
+    SUM(CASE WHEN dt.DataDoc >= DATEADD(year, -1, GETDATE()) THEN tot.TotDocumentoE ELSE 0 END) as FatturatoAnno,
+    COUNT(CASE WHEN dt.DataDoc >= DATEADD(year, -1, GETDATE()) THEN dt.Id_DoTes END) as OrdiniAnno
+FROM CF cf
+LEFT JOIN DOTes dt ON cf.Cd_CF = dt.Cd_CF AND dt.TipoDocumento = 'F'
+LEFT JOIN DOTotali tot ON dt.Id_DoTes = tot.Id_DoTes
+LEFT JOIN Agente ag ON cf.Cd_Agente_1 = ag.Cd_Agente
+WHERE cf.Cliente = 1 
+AND cf.Obsoleto = 0
+AND cf.Email IS NOT NULL
+GROUP BY cf.Cd_CF, cf.Descrizione, cf.Email, ag.Descrizione, ag.Email
+HAVING MAX(dt.DataDoc) < DATEADD(day, -30, GETDATE())
+AND SUM(CASE WHEN dt.DataDoc >= DATEADD(year, -1, GETDATE()) THEN tot.TotDocumentoE ELSE 0 END) > 1000
+ORDER BY FatturatoAnno DESC
+```
+
+### 4. Dashboard Vendite Real-time
+
+**Trigger**: Cron ogni 15 minuti durante orario lavorativo
+**Descrizione**: Aggiorna KPI vendite per dashboard
+
+```sql
+-- Query KPI giornalieri
+SELECT 
+    CAST(GETDATE() AS DATE) as DataRiferimento,
+    -- KPI Vendite Oggi
+    (SELECT ISNULL(SUM(tot.TotDocumentoE), 0) 
+     FROM DOTes dt JOIN DOTotali tot ON dt.Id_DoTes = tot.Id_DoTes 
+     WHERE dt.TipoDocumento = 'F' AND CAST(dt.DataDoc AS DATE) = CAST(GETDATE() AS DATE)) as FatturatoOggi,
+    
+    (SELECT COUNT(*) 
+     FROM DOTes dt 
+     WHERE dt.TipoDocumento = 'F' AND CAST(dt.DataDoc AS DATE) = CAST(GETDATE() AS DATE)) as FattureOggi,
+    
+    -- KPI Mese Corrente
+    (SELECT ISNULL(SUM(tot.TotDocumentoE), 0) 
+     FROM DOTes dt JOIN DOTotali tot ON dt.Id_DoTes = tot.Id_DoTes 
+     WHERE dt.TipoDocumento = 'F' 
+     AND YEAR(dt.DataDoc) = YEAR(GETDATE()) 
+     AND MONTH(dt.DataDoc) = MONTH(GETDATE())) as FatturatoMese,
+    
+    -- Ordini in Attesa
+    (SELECT COUNT(*) 
+     FROM DOTes dt JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes 
+     WHERE dt.TipoDocumento = 'O' AND dr.Evasa = 0) as OrdiniAperti,
+    
+    -- Scaduto Totale
+    (SELECT ISNULL(SUM(sc.ImportoE), 0) 
+     FROM SC sc 
+     WHERE sc.Pagata = 0 AND sc.DataScadenza < GETDATE()) as TotaleScaduto,
+    
+    -- Articoli Sottoscorta
+    (SELECT COUNT(*) 
+     FROM AR ar 
+     WHERE ar.ScortaMinima > 0 
+     AND ar.ScortaMinima >= (SELECT ISNULL(SUM(mgm.QuantitaSign), 0) 
+                            FROM MGMov mgm WHERE mgm.Cd_AR = ar.Cd_AR)) as ArticoliSottoscorta
+```
+
+### 5. Riconciliazione Pagamenti Automatica
+
+**Trigger**: Upload file estratto conto bancario
+**Descrizione**: Match automatico movimenti bancari con scadenzario
+
+```sql
+-- Query per matching automatico
+WITH MovimentiBanca AS (
+    SELECT 
+        DataMovimento,
+        Importo,
+        Descrizione,
+        UPPER(REPLACE(REPLACE(Descrizione, ' ', ''), '.', '')) as DescrizioneClean
+    FROM #TempMovimentiBanca
+),
+ScadenzeAperte AS (
+    SELECT 
+        sc.Id_SC,
+        sc.Cd_CF,
+        cf.Descrizione as Cliente,
+        sc.ImportoE,
+        sc.DataScadenza,
+        sc.NumFattura,
+        UPPER(REPLACE(REPLACE(cf.Descrizione, ' ', ''), '.', '')) as ClienteClean
+    FROM SC sc
+    JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
+    WHERE sc.Pagata = 0
+)
+SELECT 
+    mb.DataMovimento,
+    mb.Importo,
+    mb.Descrizione,
+    sa.Id_SC,
+    sa.Cliente,
+    sa.ImportoE,
+    sa.DataScadenza,
+    sa.NumFattura,
+    -- Score di matching
+    (CASE 
+        WHEN ABS(mb.Importo - sa.ImportoE) < 0.01 THEN 50 
+        WHEN ABS(mb.Importo - sa.ImportoE) < 1 THEN 30
+        ELSE 0
+    END +
+    CASE 
+        WHEN mb.DescrizioneClean LIKE '%' + sa.ClienteClean + '%' THEN 30
+        WHEN sa.ClienteClean LIKE '%' + mb.DescrizioneClean + '%' THEN 20
+        ELSE 0
+    END +
+    CASE 
+        WHEN ABS(DATEDIFF(day, mb.DataMovimento, sa.DataScadenza)) <= 5 THEN 20
+        WHEN ABS(DATEDIFF(day, mb.DataMovimento, sa.DataScadenza)) <= 15 THEN 10
+        ELSE 0
+    END) as MatchScore
+FROM MovimentiBanca mb
+CROSS JOIN ScadenzeAperte sa
+WHERE ABS(mb.Importo - sa.ImportoE) < (sa.ImportoE * 0.02) -- Tolleranza 2%
+ORDER BY MatchScore DESC
+```
+
+---
+
+## 📊 DASHBOARD QUERIES AVANZATE
+
+### Query Master Dashboard CEO
+
+```sql
+-- DASHBOARD EXECUTIVE: KPI Principali
+WITH KPIVendite AS (
+    SELECT 
+        ISNULL(SUM(CASE WHEN CAST(dt.DataDoc AS DATE) = CAST(GETDATE() AS DATE) THEN tot.TotDocumentoE END), 0) as FatturatoOggi,
+        ISNULL(SUM(CASE WHEN YEAR(dt.DataDoc) = YEAR(GETDATE()) AND MONTH(dt.DataDoc) = MONTH(GETDATE()) THEN tot.TotDocumentoE END), 0) as FatturatoMese,
+        ISNULL(SUM(CASE WHEN YEAR(dt.DataDoc) = YEAR(GETDATE()) THEN tot.TotDocumentoE END), 0) as FatturatoAnno,
+        ISNULL(SUM(CASE WHEN dt.DataDoc >= DATEADD(day, -30, GETDATE()) THEN tot.TotDocumentoE END), 0) as Fatturato30gg
+    FROM DOTes dt
+    JOIN DOTotali tot ON dt.Id_DoTes = tot.Id_DoTes
+    WHERE dt.TipoDocumento = 'F'
+),
+KPICrediti AS (
+    SELECT 
+        ISNULL(SUM(CASE WHEN sc.DataScadenza < GETDATE() THEN sc.ImportoE END), 0) as Scaduto,
+        ISNULL(SUM(CASE WHEN sc.DataScadenza BETWEEN GETDATE() AND DATEADD(day, 30, GETDATE()) THEN sc.ImportoE END), 0) as Scade30gg,
+        ISNULL(SUM(sc.ImportoE), 0) as TotaleCrediti
+    FROM SC sc
+    WHERE sc.Pagata = 0
+),
+KPIMagazzino AS (
+    SELECT 
+        SUM(mgm.ValoreSign) as ValoreGiacenze,
+        COUNT(DISTINCT CASE WHEN ar.ScortaMinima > 0 AND ISNULL(giacenze.Giacenza, 0) <= ar.ScortaMinima THEN ar.Cd_AR END) as ArticoliSottoscorta
+    FROM AR ar
+    LEFT JOIN MGMov mgm ON ar.Cd_AR = mgm.Cd_AR
+    LEFT JOIN (
+        SELECT Cd_AR, SUM(QuantitaSign) as Giacenza 
+        FROM MGMov 
+        GROUP BY Cd_AR
+    ) giacenze ON ar.Cd_AR = giacenze.Cd_AR
+    WHERE ar.Obsoleto = 0
+)
+SELECT 
+    kv.FatturatoOggi,
+    kv.FatturatoMese,
+    kv.FatturatoAnno,
+    kv.Fatturato30gg,
+    kc.Scaduto,
+    kc.Scade30gg,
+    kc.TotaleCrediti,
+    km.ValoreGiacenze,
+    km.ArticoliSottoscorta,
+    -- Percentuali di crescita
+    CASE WHEN kv.Fatturato30gg > 0 THEN 
+        ROUND(((kv.FatturatoMese / (kv.Fatturato30gg / 30.0 * DAY(EOMONTH(GETDATE())))) - 1) * 100, 1)
+    END as CrescitaMensile,
+    -- Indici di liquidità
+    CASE WHEN kc.TotaleCrediti > 0 THEN 
+        ROUND((kc.Scaduto / kc.TotaleCrediti) * 100, 1)
+    END as PercScaduto
+FROM KPIVendite kv
+CROSS JOIN KPICrediti kc
+CROSS JOIN KPIMagazzino km
+```
+
+### Analisi ABC Clienti Automatica
+
+```sql
+-- ANALISI ABC CLIENTI: Classificazione automatica
+WITH FatturatoClienti AS (
+    SELECT 
+        cf.Cd_CF,
+        cf.Descrizione,
+        SUM(tot.TotDocumentoE) as FatturatoTotale,
+        COUNT(DISTINCT dt.Id_DoTes) as NumeroOrdini,
+        AVG(tot.TotDocumentoE) as OrdineMedia,
+        MAX(dt.DataDoc) as UltimoOrdine
+    FROM CF cf
+    JOIN DOTes dt ON cf.Cd_CF = dt.Cd_CF
+    JOIN DOTotali tot ON dt.Id_DoTes = tot.Id_DoTes
+    WHERE dt.TipoDocumento = 'F'
+    AND dt.DataDoc >= DATEADD(year, -1, GETDATE())
+    AND cf.Cliente = 1
+    GROUP BY cf.Cd_CF, cf.Descrizione
+),
+ClassificazioneABC AS (
+    SELECT *,
+        SUM(FatturatoTotale) OVER() as FatturatoComplessivo,
+        SUM(FatturatoTotale) OVER(ORDER BY FatturatoTotale DESC) as FatturatoProgressivo,
+        ROW_NUMBER() OVER(ORDER BY FatturatoTotale DESC) as Posizione
+    FROM FatturatoClienti
+)
+SELECT 
+    Cd_CF,
+    Descrizione,
+    FatturatoTotale,
+    NumeroOrdini,
+    OrdineMedia,
+    UltimoOrdine,
+    DATEDIFF(day, UltimoOrdine, GETDATE()) as GiorniUltimoOrdine,
+    ROUND((FatturatoTotale / FatturatoComplessivo) * 100, 2) as PercFatturato,
+    ROUND((FatturatoProgressivo / FatturatoComplessivo) * 100, 2) as PercCumulata,
+    CASE 
+        WHEN (FatturatoProgressivo / FatturatoComplessivo) <= 0.8 THEN 'A'
+        WHEN (FatturatoProgressivo / FatturatoComplessivo) <= 0.95 THEN 'B'
+        ELSE 'C'
+    END as ClasseABC,
+    CASE 
+        WHEN DATEDIFF(day, UltimoOrdine, GETDATE()) <= 30 THEN 'ATTIVO'
+        WHEN DATEDIFF(day, UltimoOrdine, GETDATE()) <= 90 THEN 'DORMIENTE'
+        ELSE 'INATTIVO'
+    END as StatoAttivita
+FROM ClassificazioneABC
+ORDER BY FatturatoTotale DESC
+```
+
+---
+
+## 🔄 STORED PROCEDURES UTILITY
+
+### SP_CalcolaGiacenze
+
+```sql
+CREATE PROCEDURE SP_CalcolaGiacenze
+    @DataRiferimento DATETIME = NULL,
+    @Magazzino CHAR(5) = NULL,
+    @Articolo VARCHAR(20) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    IF @DataRiferimento IS NULL SET @DataRiferimento = GETDATE();
+    
+    SELECT 
+        mgm.Cd_AR,
+        ar.Descrizione,
+        mgm.Cd_MG,
+        mg.Descrizione as DescrizioneMagazzino,
+        SUM(mgm.QuantitaSign) as Giacenza,
+        SUM(mgm.ValoreSign) as ValoreGiacenza,
+        ar.ScortaMinima,
+        ar.ScortaMassima,
+        ar.CostoStandard,
+        CASE 
+            WHEN SUM(mgm.QuantitaSign) <= ar.ScortaMinima THEN 'SOTTOSCORTA'
+            WHEN SUM(mgm.QuantitaSign) >= ar.ScortaMassima THEN 'SOVRASCORTA'
+            ELSE 'NORMALE'
+        END as StatoGiacenza
+    FROM MGMov mgm
+    JOIN AR ar ON mgm.Cd_AR = ar.Cd_AR
+    JOIN MG mg ON mgm.Cd_MG = mg.Cd_MG
+    WHERE mgm.DataMov <= @DataRiferimento
+    AND (@Magazzino IS NULL OR mgm.Cd_MG = @Magazzino)
+    AND (@Articolo IS NULL OR mgm.Cd_AR = @Articolo)
+    AND ar.Obsoleto = 0
+    GROUP BY mgm.Cd_AR, ar.Descrizione, mgm.Cd_MG, mg.Descrizione,
+             ar.ScortaMinima, ar.ScortaMassima, ar.CostoStandard
+    HAVING SUM(mgm.QuantitaSign) <> 0
+    ORDER BY mgm.Cd_MG, mgm.Cd_AR;
+END
+```
+
+### SP_FatturatoDettagliato
+
+```sql
+CREATE PROCEDURE SP_FatturatoDettagliato
+    @DataInizio DATETIME,
+    @DataFine DATETIME,
+    @Cliente CHAR(7) = NULL,
+    @Agente CHAR(3) = NULL,
+    @Gruppo VARCHAR(3) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    SELECT 
+        dt.DataDoc,
+        dt.NumeroDoc,
+        cf.Cd_CF,
+        cf.Descrizione as Cliente,
+        ag.Descrizione as Agente,
+        ar.Cd_AR,
+        ar.Descrizione as Articolo,
+        ar.Cd_ARGruppo1 + '.' + ar.Cd_ARGruppo2 + '.' + ar.Cd_ARGruppo3 as Gruppo,
+        dr.Qta,
+        dr.PrezzoUnitarioV,
+        dr.ScontoRiga,
+        dr.PrezzoTotaleE as Ricavo,
+        ISNULL(ar.CostoStandard * dr.Qta, 0) as Costo,
+        dr.PrezzoTotaleE - ISNULL(ar.CostoStandard * dr.Qta, 0) as Margine,
+        CASE 
+            WHEN ar.CostoStandard > 0 AND dr.PrezzoTotaleE > 0 THEN
+                ROUND(((dr.PrezzoTotaleE - (ar.CostoStandard * dr.Qta)) / dr.PrezzoTotaleE) * 100, 2)
+            ELSE 0
+        END as PercMargine
+    FROM DOTes dt
+    JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+    JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+    JOIN AR ar ON dr.Cd_AR = ar.Cd_AR
+    LEFT JOIN Agente ag ON dt.Cd_Agente_1 = ag.Cd_Agente
+    WHERE dt.TipoDocumento = 'F'
+    AND dt.DataDoc BETWEEN @DataInizio AND @DataFine
+    AND (@Cliente IS NULL OR cf.Cd_CF = @Cliente)
+    AND (@Agente IS NULL OR dt.Cd_Agente_1 = @Agente)
+    AND (@Gruppo IS NULL OR ar.Cd_ARGruppo1 = @Gruppo)
+    ORDER BY dt.DataDoc DESC, dt.NumeroDoc, dr.Riga;
+END
+```
+
+---
+
+## 🛠️ BEST PRACTICES
+
+### Performance Optimization
+
+**Indici Consigliati**:
+```sql
+-- Indici per performance query frequenti
+CREATE INDEX IX_MGMov_Articolo_Data ON MGMov (Cd_AR, DataMov) INCLUDE (QuantitaSign, ValoreSign);
+CREATE INDEX IX_DOTes_Data_Tipo ON DOTes (DataDoc, TipoDocumento) INCLUDE (Cd_CF, Id_DoTes);
+CREATE INDEX IX_SC_Cliente_Scadenza ON SC (Cd_CF, DataScadenza) INCLUDE (ImportoE, Pagata);
+CREATE INDEX IX_DORig_Articolo ON DORig (Cd_AR) INCLUDE (Qta, PrezzoTotaleE);
+```
+
+**Query Optimization**:
+```sql
+-- Usare sempre filtri su date indicizzate
+WHERE dt.DataDoc >= @DataInizio AND dt.DataDoc <= @DataFine
+
+-- Evitare funzioni sui campi WHERE
+-- SBAGLIATO: WHERE YEAR(DataDoc) = 2024
+-- CORRETTO: WHERE DataDoc >= '2024-01-01' AND DataDoc < '2025-01-01'
+
+-- Usare EXISTS invece di IN per subquery grandi
+WHERE EXISTS (SELECT 1 FROM SC WHERE Cd_CF = CF.Cd_CF AND Pagata = 0)
+```
+
+### Sicurezza Dati
+
+**Permissions**:
+```sql
+-- Crea utente readonly per automazioni
+CREATE LOGIN automation_user WITH PASSWORD = 'SecurePassword123!';
+CREATE USER automation_user FOR LOGIN automation_user;
+GRANT SELECT ON SCHEMA::dbo TO automation_user;
+-- Nega accesso a tabelle sensibili
+DENY SELECT ON Operatore TO automation_user;
+```
+
+**Audit Queries**:
+```sql
+-- Template query audit modifiche
+SELECT 
+    t.TimeUpd as DataModifica,
+    t.UserUpd as Utente,
+    'CF' as Tabella,
+    t.Cd_CF as ChiaveRecord,
+    t.Descrizione
+FROM CF t
+WHERE t.TimeUpd >= DATEADD(day, -1, GETDATE())
+UNION ALL
+SELECT 
+    t.TimeUpd, t.UserUpd, 'AR', t.Cd_AR, t.Descrizione
+FROM AR t
+WHERE t.TimeUpd >= DATEADD(day, -1, GETDATE())
+ORDER BY DataModifica DESC;
+```
+
+### Monitoraggio Sistema
+
+**Health Check Query**:
+```sql
+-- SYSTEM HEALTH CHECK
+SELECT 
+    'Database Size' as Metric,
+    CAST(SUM(size * 8.0 / 1024) AS DECIMAL(10,2)) as Value,
+    'MB' as Unit
+FROM sys.database_files
+UNION ALL
+SELECT 
+    'Documenti Oggi',
+    COUNT(*),
+    'Documenti'
+FROM DOTes 
+WHERE CAST(TimeIns AS DATE) = CAST(GETDATE() AS DATE)
+UNION ALL
+SELECT 
+    'Movimenti Magazzino Oggi',
+    COUNT(*),
+    'Movimenti'
+FROM MGMov 
+WHERE CAST(DataMov AS DATE) = CAST(GETDATE() AS DATE)
+UNION ALL
+SELECT 
+    'Utenti Attivi Oggi',
+    COUNT(DISTINCT UserIns),
+    'Utenti'
+FROM (
+    SELECT UserIns FROM DOTes WHERE CAST(TimeIns AS DATE) = CAST(GETDATE() AS DATE)
+    UNION 
+    SELECT UserIns FROM MGMov WHERE CAST(DataMov AS DATE) = CAST(GETDATE() AS DATE)
+) u;
+```
+
+---
+
+## 📱 INTEGRAZIONI COMUNI
+
+### Webhook Payload Examples
+
+**Nuovo Ordine Cliente**:
+```json
+{
+  "event": "ordine.creato",
+  "timestamp": "2025-01-03T10:30:00Z",
+  "data": {
+    "id_ordine": 12345,
+    "numero": "ORD2025001234",
+    "data": "2025-01-03",
+    "cliente": {
+      "codice": "CLI001",
+      "descrizione": "Cliente Test SRL",
+      "email": "ordini@clientetest.it"
+    },
+    "totale": 1250.50,
+    "righe": [
+      {
+        "articolo": "ART001",
+        "descrizione": "Prodotto Test",
+        "quantita": 10,
+        "prezzo_unitario": 125.05
+      }
+    ]
+  }
+}
+```
+
+**Alert Sottoscorta**:
+```json
+{
+  "event": "magazzino.sottoscorta",
+  "timestamp": "2025-01-03T08:00:00Z",
+  "data": {
+    "articoli_critici": [
+      {
+        "codice": "ART001",
+        "descrizione": "Prodotto Critico",
+        "giacenza_attuale": 5,
+        "scorta_minima": 20,
+        "magazzino": "MAG01"
+      }
+    ],
+    "totale_articoli": 15
+  }
+}
+```
+
+### API Endpoints Standard
+
+```
+GET /api/articoli/{codice}/giacenza
+GET /api/clienti/{codice}/scadenzario
+GET /api/documenti?tipo=F&data_da=2025-01-01
+POST /api/ordini
+PUT /api/listini/{codice}/prezzi
+```
+
+---
+
+## 🎯 CONCLUSIONI
+
+Questa guida fornisce una base completa per:
+
+1. **Comprendere** la struttura dati Arca Evolution
+2. **Creare** automazioni intelligenti con n8n
+3. **Ottimizzare** le performance delle query
+4. **Integrare** sistemi esterni
+5. **Monitorare** la salute del sistema
+
+### Quick Reference
+
+**Tabelle Must-Know**: `AR`, `CF`, `DOTes`, `DORig`, `MGMov`, `SC`, `LS`
+
+**Join Pattern Base**: 
+```sql
+DOTes → DORig → AR
+DOTes → CF → Agente  
+MGMov → AR → MG
+SC → CF
+```
+
+**Performance Tip**: Sempre filtrare per data e usare indici appropriati
+
+**Security Tip**: Utilizzare utenti dedicati con permessi minimi per automazioni
+
+---
+
+---
+
+## 🔍 QUERY PRATICHE PER SVILUPPATORI
+
+### 📦 LETTURA PRODOTTI DA DDT E FATTURE
+
+**Query 1: Prodotti più recenti venduti**
+```sql
+-- Visualizza gli ultimi 10 prodotti venduti con dettagli
+SELECT TOP 10
+    Cd_AR,
+    Descrizione,
+    Qta,
+    PrezzoUnitarioV,
+    DataDoc
+FROM DORig
+WHERE Cd_AR IS NOT NULL
+ORDER BY DataDoc DESC
+```
+
+**Query 2: Fatture Attive (Vendite ai Clienti)**
+```sql
+-- Fatture emesse con dettaglio prodotti e clienti
+SELECT TOP 20
+    dt.NumeroDoc,
+    dt.DataDoc,
+    dt.TipoDocumento,
+    cf.Cd_CF,
+    cf.Descrizione as Cliente,
+    dr.Cd_AR,
+    dr.Descrizione as Articolo,
+    dr.Qta,
+    dr.PrezzoUnitarioV,
+    dr.PrezzoTotaleE,
+    dt.Esecutivo,
+    dt.Contabile
+FROM DOTes dt
+    JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+    JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+WHERE dt.TipoDocumento = 'F'  -- F = Fattura
+    AND dt.SegnoDocumento = 1  -- Fatture di vendita (positive)
+    AND cf.Cliente = 1         -- Solo clienti
+ORDER BY dt.DataDoc DESC, dt.NumeroDoc DESC
+```
+
+**Query 3: DDT (Documenti di Trasporto)**
+```sql
+-- DDT emessi con prodotti consegnati
+SELECT TOP 20
+    dt.NumeroDoc,
+    dt.DataDoc,
+    dt.TipoDocumento,
+    cf.Cd_CF,
+    cf.Descrizione as Cliente,
+    dr.Cd_AR,
+    dr.Descrizione as Articolo,
+    dr.Qta,
+    dr.PrezzoUnitarioV,
+    dt.Esecutivo,
+    dt.DataConsegna
+FROM DOTes dt
+    JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+    JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+WHERE dt.TipoDocumento = 'D'  -- D = DDT
+    AND dt.SegnoDocumento = 1  -- DDT di vendita
+ORDER BY dt.DataDoc DESC, dt.NumeroDoc DESC
+```
+
+**Query 4: Fatture Passive (Acquisti da Fornitori)**
+```sql
+-- Fatture ricevute dai fornitori
+SELECT TOP 20
+    dt.NumeroDoc,
+    dt.DataDoc,
+    dt.TipoDocumento,
+    cf.Cd_CF,
+    cf.Descrizione as Fornitore,
+    dr.Cd_AR,
+    dr.Descrizione as Articolo,
+    dr.Qta,
+    dr.PrezzoUnitarioV,
+    dr.PrezzoTotaleE,
+    dt.Esecutivo,
+    dt.Contabile
+FROM DOTes dt
+    JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+    JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+WHERE dt.TipoDocumento = 'F'  -- F = Fattura
+    AND dt.SegnoDocumento = -1 -- Fatture di acquisto (negative)
+    AND cf.Fornitore = 1       -- Solo fornitori
+ORDER BY dt.DataDoc DESC, dt.NumeroDoc DESC
+```
+
+### 📊 QUERY AGGREGATE UTILI
+
+**Query 5: Fatturato per Cliente (Ultimo Mese)**
+```sql
+-- Top clienti per fatturato ultimo mese
+SELECT 
+    cf.Cd_CF,
+    cf.Descrizione as Cliente,
+    SUM(dr.PrezzoTotaleE) as FatturatoTotale,
+    COUNT(DISTINCT dt.Id_DoTes) as NumeroFatture,
+    AVG(dr.PrezzoUnitarioV) as PrezzoMedio
+FROM DOTes dt
+    JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+    JOIN CF cf ON dt.Cd_CF = cf.Cd_CF
+WHERE dt.TipoDocumento = 'F'
+    AND dt.SegnoDocumento = 1
+    AND dt.DataDoc >= DATEADD(month, -1, GETDATE())
+    AND cf.Cliente = 1
+GROUP BY cf.Cd_CF, cf.Descrizione
+ORDER BY FatturatoTotale DESC
+```
+
+**Query 6: Prodotti più Venduti (Ultimo Mese)**
+```sql
+-- Top prodotti per quantità venduta
+SELECT 
+    dr.Cd_AR,
+    dr.Descrizione as Prodotto,
+    SUM(dr.Qta) as QuantitaTotale,
+    SUM(dr.PrezzoTotaleE) as FatturatoTotale,
+    AVG(dr.PrezzoUnitarioV) as PrezzoMedio,
+    COUNT(DISTINCT dt.Id_DoTes) as NumeroOrdini
+FROM DOTes dt
+    JOIN DORig dr ON dt.Id_DoTes = dr.Id_DOTes
+WHERE dt.TipoDocumento = 'F'
+    AND dt.SegnoDocumento = 1
+    AND dt.DataDoc >= DATEADD(month, -1, GETDATE())
+    AND dr.Cd_AR IS NOT NULL
+GROUP BY dr.Cd_AR, dr.Descrizione
+ORDER BY QuantitaTotale DESC
+```
+
+**Query 7: Giacenze Attuali con Allarmi**
+```sql
+-- Situazione giacenze con alert sottoscorta
+SELECT 
+    ar.Cd_AR,
+    ar.Descrizione,
+    ISNULL(SUM(mgm.QuantitaSign), 0) as GiacenzaAttuale,
+    ar.ScortaMinima,
+    ar.ScortaMassima,
+    ar.CostoStandard,
+    CASE 
+        WHEN ISNULL(SUM(mgm.QuantitaSign), 0) <= ar.ScortaMinima AND ar.ScortaMinima > 0 THEN 'SOTTOSCORTA'
+        WHEN ISNULL(SUM(mgm.QuantitaSign), 0) >= ar.ScortaMassima AND ar.ScortaMassima > 0 THEN 'ECCESSO'
+        ELSE 'NORMALE'
+    END as StatoGiacenza
+FROM AR ar
+    LEFT JOIN MGMov mgm ON ar.Cd_AR = mgm.Cd_AR
+WHERE ar.Obsoleto = 0
+GROUP BY ar.Cd_AR, ar.Descrizione, ar.ScortaMinima, ar.ScortaMassima, ar.CostoStandard
+HAVING ISNULL(SUM(mgm.QuantitaSign), 0) <> 0 OR ar.ScortaMinima > 0
+ORDER BY StatoGiacenza DESC, ar.Cd_AR
+```
+
+### 💰 GESTIONE SCADENZARIO
+
+**Query 8: Scadenze Clienti in Ritardo**
+```sql
+-- Clienti con pagamenti scaduti
+SELECT 
+    cf.Cd_CF,
+    cf.Descrizione as Cliente,
+    sc.DataScadenza,
+    sc.ImportoE,
+    sc.NumFattura,
+    DATEDIFF(day, sc.DataScadenza, GETDATE()) as GiorniRitardo
+FROM SC sc
+    JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
+WHERE sc.Pagata = 0
+    AND sc.DataScadenza < GETDATE()
+    AND cf.Cliente = 1
+ORDER BY GiorniRitardo DESC, sc.ImportoE DESC
+```
+
+**Query 9: Situazione Creditizia per Cliente**
+```sql
+-- Esposizione clienti con fido
+SELECT 
+    cf.Cd_CF,
+    cf.Descrizione as Cliente,
+    cf.Fido,
+    SUM(CASE WHEN sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) as EsposizioneAttuale,
+    SUM(CASE WHEN sc.Pagata = 0 AND sc.DataScadenza < GETDATE() THEN sc.ImportoE ELSE 0 END) as Scaduto,
+    CASE 
+        WHEN cf.Fido > 0 AND SUM(CASE WHEN sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) > cf.Fido THEN 'FIDO_SUPERATO'
+        WHEN SUM(CASE WHEN sc.Pagata = 0 AND sc.DataScadenza < GETDATE() THEN sc.ImportoE ELSE 0 END) > 0 THEN 'SCADUTO'
+        ELSE 'OK'
+    END as StatoCredito
+FROM CF cf
+    LEFT JOIN SC sc ON cf.Cd_CF = sc.Cd_CF
+WHERE cf.Cliente = 1
+GROUP BY cf.Cd_CF, cf.Descrizione, cf.Fido
+HAVING SUM(CASE WHEN sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) > 0
+ORDER BY StatoCredito DESC, Scaduto DESC
+```
+
+### 🔄 INTEGRAZIONE API - ENDPOINT SUGGERITI
+
+Per l'integrazione con BIHortus, utilizzare queste query come base per gli endpoint API:
+
+```
+GET /api/prodotti/recenti           -> Query 1
+GET /api/fatture/attive             -> Query 2  
+GET /api/ddt                        -> Query 3
+GET /api/fatture/passive            -> Query 4
+GET /api/analytics/clienti          -> Query 5
+GET /api/analytics/prodotti         -> Query 6
+GET /api/magazzino/giacenze         -> Query 7
+GET /api/scadenzario/ritardi        -> Query 8
+GET /api/crediti/situazione         -> Query 9
+```
+
+### 📁 PERCORSI FILE FATTURE
+
+**Fatture Passive (PDF)**: Archiviate in `C:\Users\Bottamedi\Documents\`
+- Struttura cartelle per anno: `FATT[MESE][ANNO]/`
+- Esempio: `FATTGEN25/`, `FATTFEB25/`, etc.
+- File singoli: Pattern `fat*.pdf`, `fatt*.pdf`
+
+**Fatture Storiche**: Controllare anche sottocartelle per anni precedenti
+- `FATT.GEN2022/`, `FATT02.2022/`, etc.
+
+---
+
+*Documento aggiornato al 05/07/2025 - Query testate su ADB_BOTTAMEDI - Per supporto tecnico: automazioni@bottamedi.com*
