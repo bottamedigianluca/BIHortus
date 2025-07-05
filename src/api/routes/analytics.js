@@ -32,6 +32,7 @@ router.get('/kpis', async (req, res) => {
                           startDate.getFullYear() === currentDate.getFullYear();
     
     const docTypes = isCurrentMonth ? ['B'] : ['F']; // B=DDT corrente, F=Fatture passate
+    const docTypesString = docTypes.map(t => `'${t}'`).join(',');
     
     const currentRevenueQuery = `
       SELECT 
@@ -41,7 +42,7 @@ router.get('/kpis', async (req, res) => {
       FROM DOTotali dt
       INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
       WHERE tes.DataDoc >= @startDate
-        AND tes.TipoDocumento IN ('${docTypes.join("','")}')
+        AND tes.TipoDocumento IN (${docTypesString})
         AND tes.CliFor = 'C'
         AND dt.TotDocumentoE > 0
     `;
@@ -51,6 +52,11 @@ router.get('/kpis', async (req, res) => {
       .query(currentRevenueQuery);
     
     console.log('Current result:', currentResult.recordset[0]);
+    console.log('Query generated:', currentRevenueQuery);
+    console.log('Start date:', startDate);
+    console.log('Current date:', currentDate);
+    console.log('Is current month:', isCurrentMonth);
+    console.log('Doc types:', docTypes);
 
     // Fatturato periodo precedente per calcolare crescita
     const prevStartDate = new Date(startDate);
@@ -74,6 +80,9 @@ router.get('/kpis', async (req, res) => {
 
     const current = currentResult.recordset[0];
     const previous = prevResult.recordset[0];
+    
+    console.log('Current recordset:', current);
+    console.log('Previous recordset:', previous);
     
     const revenueGrowth = previous.totalRevenue > 0 
       ? ((current.totalRevenue - previous.totalRevenue) / previous.totalRevenue * 100)
@@ -116,9 +125,12 @@ router.get('/kpis', async (req, res) => {
     });
 
   } catch (error) {
+    console.error('❌ ERRORE API ANALYTICS:', error.message);
+    console.error('Stack:', error.stack);
     logger.error('Error fetching analytics KPIs', error);
     res.json({
-      success: true,
+      success: false,
+      error: error.message,
       data: {
         totalRevenue: 0,
         revenueGrowth: 0,

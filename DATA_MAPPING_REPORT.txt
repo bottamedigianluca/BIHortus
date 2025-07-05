@@ -1,0 +1,403 @@
+================================================================================
+BIHORTUS - REPORT MAPPATURA DATI COMPLETO
+================================================================================
+Data Analisi: 2025-07-05
+Analista: AI Data Engineer
+Database ARCA: ADB_BOTTAMEDI (172.29.0.1:1433)
+
+================================================================================
+1. DASHBOARD PRINCIPALE (WholesaleDashboard.jsx)
+================================================================================
+
+WIDGET: Fatturato Oggi
+├── Dato Visualizzato: €X,XXX.XX
+├── Fonte Originale: API /api/dashboard/kpis?days=1
+├── Query Database: [DA VERIFICARE - POTREBBE ESSERE MOCK]
+├── Tabelle ARCA: DOTes + DOTotali (WHERE DataDoc = TODAY)
+├── Calcolo: SUM(DOTotali.TotDocumentoE) WHERE TipoDocumento='B' AND CliFor='C'
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Ordini Oggi
+├── Dato Visualizzato: XX ordini
+├── Fonte Originale: API /api/dashboard/kpis?days=1
+├── Query Database: [DA VERIFICARE - POTREBBE ESSERE MOCK]
+├── Tabelle ARCA: COUNT(DISTINCT DOTes.Id_DoTes)
+├── Calcolo: COUNT documenti WHERE DataDoc = TODAY
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Clienti Attivi Oggi
+├── Dato Visualizzato: XX clienti
+├── Fonte Originale: API /api/dashboard/kpis?days=1
+├── Query Database: [DA VERIFICARE - POTREBBE ESSERE MOCK]
+├── Tabelle ARCA: COUNT(DISTINCT DOTes.Cd_CF)
+├── Calcolo: COUNT clienti unici WHERE DataDoc = TODAY
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Margine Medio
+├── Dato Visualizzato: XX.X%
+├── Fonte Originale: API /api/dashboard/kpis
+├── Query Database: [DA VERIFICARE - POTREBBE ESSERE MOCK]
+├── Tabelle ARCA: DORig + AR (PrezzoU vs CostoStandard)
+├── Calcolo: AVG((PrezzoU - CostoStandard) / PrezzoU * 100)
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Grafico Vendite Settimanali
+├── Dato Visualizzato: Array di valori giornalieri
+├── Fonte Originale: API /api/dashboard/sales-trends
+├── Query Database: [DA VERIFICARE - MOCK GENERATO]
+├── Tabelle ARCA: DOTes + DOTotali GROUP BY DataDoc
+├── Calcolo: SUM(TotDocumentoE) per ogni giorno ultimi 7 giorni
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Top 5 Prodotti
+├── Dato Visualizzato: Lista prodotti con quantità
+├── Fonte Originale: API /api/dashboard/top-products
+├── Query Database: [DA VERIFICARE - NOMI INVENTATI]
+├── Tabelle ARCA: DORig + AR ORDER BY SUM(ImportoE) DESC
+├── Calcolo: TOP 5 prodotti per fatturato periodo
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Clienti in Scadenza
+├── Dato Visualizzato: Lista clienti con importi scadenza
+├── Fonte Originale: API /api/dashboard/overdue-customers
+├── Query Database: [DA VERIFICARE]
+├── Tabelle ARCA: SC + CF WHERE DataScadenza < GETDATE() AND Pagata=0
+├── Calcolo: Lista partite aperte scadute
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+================================================================================
+2. GESTIONE CLIENTI (CustomersManagement.jsx)
+================================================================================
+
+WIDGET: Lista Clienti
+├── Dato Visualizzato: Elenco clienti con dettagli
+├── Fonte Originale: API /api/customers
+├── Query Database: [VERIFICARE SE SOLO 100 RECORD]
+├── Tabelle ARCA: CF (Cd_CF, Descrizione, PartitaIva, CodiceFiscale, Indirizzo)
+├── Calcolo: SELECT * FROM CF WHERE Descrizione IS NOT NULL
+└── Status: ⚠️ PARZIALE - SOLO INTESTAZIONI REALI, DATI BUSINESS MOCK
+
+WIDGET: Fatturato per Cliente
+├── Dato Visualizzato: €X,XXX per ogni cliente
+├── Fonte Originale: JOIN con vendite cliente
+├── Query Database: [DA VERIFICARE - PROBABILMENTE MOCK]
+├── Tabelle ARCA: SUM(DOTotali.TotDocumentoE) GROUP BY DOTes.Cd_CF
+├── Calcolo: Totale fatturato storico per cliente
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Score Creditizio Cliente
+├── Dato Visualizzato: Punteggio 1-100
+├── Fonte Originale: Algoritmo di scoring
+├── Query Database: [DA VERIFICARE - PROBABILMENTE MOCK]
+├── Tabelle ARCA: SC (ritardi pagamenti, importi, frequenza)
+├── Calcolo: Algoritmo basato su storico pagamenti e scadenze
+└── Status: ❌ DA IMPLEMENTARE ALGORITMO REALE
+
+WIDGET: Trend Crescita Cliente
+├── Dato Visualizzato: Percentuale crescita/decrescita
+├── Fonte Originale: Confronto periodi
+├── Query Database: [DA VERIFICARE - PROBABILMENTE MOCK]
+├── Tabelle ARCA: Confronto fatturato anno corrente vs precedente
+├── Calcolo: (Fatturato_2024 - Fatturato_2023) / Fatturato_2023 * 100
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Ultima Attività Cliente
+├── Dato Visualizzato: Data ultimo ordine
+├── Fonte Originale: MAX(DataDoc) per cliente
+├── Query Database: [DA VERIFICARE]
+├── Tabelle ARCA: MAX(DOTes.DataDoc) WHERE Cd_CF = cliente
+├── Calcolo: Data documento più recente
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+================================================================================
+3. FATTURE ATTIVE (ActiveInvoices.jsx)
+================================================================================
+
+WIDGET: Lista Fatture Attive
+├── Dato Visualizzato: Elenco fatture emesse
+├── Fonte Originale: API /api/invoices/active
+├── Query Database: [VERIFICARE SE DATI REALI O MOCK]
+├── Tabelle ARCA: DOTes + DOTotali WHERE TipoDocumento='F' AND CliFor='C'
+├── Calcolo: SELECT fatture clienti non incassate
+└── Status: ⚠️ DA VERIFICARE - ENDPOINT ESISTENTE MA DATI INCERTI
+
+WIDGET: Importo Totale Fatture
+├── Dato Visualizzato: €X,XXX,XXX.XX
+├── Fonte Originale: SUM importi fatture attive
+├── Query Database: [DA VERIFICARE]
+├── Tabelle ARCA: SUM(DOTotali.TotDocumentoE) delle fatture aperte
+├── Calcolo: Somma tutti i crediti verso clienti
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Fatture Scadute
+├── Dato Visualizzato: Numero e importo scadute
+├── Fonte Originale: Filtro su date scadenza
+├── Query Database: [DA VERIFICARE]
+├── Tabelle ARCA: SC WHERE DataScadenza < GETDATE() AND Pagata=0
+├── Calcolo: COUNT e SUM delle partite scadute
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+WIDGET: Status Fattura (Pagata/Non Pagata)
+├── Dato Visualizzato: Badge colorato status
+├── Fonte Originale: Campo stato fattura
+├── Query Database: [DA VERIFICARE]
+├── Tabelle ARCA: SC.Pagata + calcolo giorni scadenza
+├── Calcolo: Logica stato basata su pagamenti e scadenze
+└── Status: ❌ DA IMPLEMENTARE CON DATI REALI
+
+================================================================================
+4. FATTURE PASSIVE (PassiveInvoicesPage.jsx)
+================================================================================
+
+WIDGET: Lista Fatture Passive
+├── Dato Visualizzato: Elenco fatture ricevute da fornitori
+├── Fonte Originale: API /api/invoices/passive
+├── Query Database: [IMPLEMENTAZIONE IN CORSO]
+├── Tabelle ARCA: SC WHERE ImportoE < 0 (debiti verso fornitori)
+├── Calcolo: SELECT debiti verso fornitori
+└── Status: 🔄 IN IMPLEMENTAZIONE
+
+WIDGET: Totale Debiti Fornitori
+├── Dato Visualizzato: €X,XXX.XX
+├── Fonte Originale: SUM importi fatture passive
+├── Query Database: [DA IMPLEMENTARE]
+├── Tabelle ARCA: SUM(ABS(SC.ImportoE)) WHERE ImportoE < 0
+├── Calcolo: Somma tutti i debiti aperti
+└── Status: ❌ DA IMPLEMENTARE
+
+WIDGET: Scadenze Fornitori
+├── Dato Visualizzato: Lista scadenze imminenti
+├── Fonte Originale: Filtro su date scadenza
+├── Query Database: [DA IMPLEMENTARE]
+├── Tabelle ARCA: SC WHERE ImportoE < 0 AND DataScadenza <= DATEADD(day, 7, GETDATE())
+├── Calcolo: Debiti in scadenza prossimi 7 giorni
+└── Status: ❌ DA IMPLEMENTARE
+
+================================================================================
+5. ANALYTICS AVANZATA (WholesaleAnalytics.jsx)
+================================================================================
+
+WIDGET: KPI Fatturato Totale
+├── Dato Visualizzato: €XXX,XXX.XX
+├── Fonte Originale: API /api/analytics/kpis
+├── Query Database: [IMPLEMENTATO MA NON FUNZIONA]
+├── Tabelle ARCA: DOTotali.TotDocumentoE con logica B/F
+├── Calcolo: SUM(TotDocumentoE) DDT mese corrente, Fatture mesi passati
+└── Status: ⚠️ QUERY CORRETTA MA API NON RESTITUISCE DATI
+
+WIDGET: Valore Medio Ordine (AOV)
+├── Dato Visualizzato: €X,XXX.XX
+├── Fonte Originale: API /api/analytics/kpis
+├── Query Database: [IMPLEMENTATO MA NON FUNZIONA]
+├── Tabelle ARCA: TotDocumentoE / COUNT(Id_DoTes)
+├── Calcolo: Media importo per documento
+└── Status: ⚠️ LOGICA CORRETTA MA NON FUNZIONALE
+
+WIDGET: Clienti Attivi
+├── Dato Visualizzato: XXX clienti
+├── Fonte Originale: API /api/analytics/kpis
+├── Query Database: [IMPLEMENTATO MA NON FUNZIONA]
+├── Tabelle ARCA: COUNT(DISTINCT DOTes.Cd_CF)
+├── Calcolo: Conteggio clienti unici nel periodo
+└── Status: ⚠️ QUERY IMPLEMENTATA MA NON RESTITUISCE DATI
+
+WIDGET: Margine Percentuale
+├── Dato Visualizzato: XX.X%
+├── Fonte Originale: API /api/analytics/kpis
+├── Query Database: [SEMPLIFICATO A VALORE FISSO]
+├── Tabelle ARCA: DORig.PrezzoU vs AR.CostoStandard
+├── Calcolo: AVG((PrezzoU - CostoStandard) / PrezzoU * 100)
+└── Status: ❌ ATTUALMENTE FISSO 25.5% - DA CALCOLARE REALMENTE
+
+WIDGET: Vendite per Categoria
+├── Dato Visualizzato: Grafico torta categorie prodotti
+├── Fonte Originale: API /api/analytics/categories
+├── Query Database: [IMPLEMENTATO CON LOGICA LIKE]
+├── Tabelle ARCA: DORig + AR con categorizzazione LIKE '%AGLIO%'
+├── Calcolo: Classificazione automatica basata su descrizione prodotto
+└── Status: ⚠️ LOGICA IMPLEMENTATA MA NON RESTITUISCE DATI
+
+WIDGET: Top Prodotti
+├── Dato Visualizzato: Tabella prodotti per fatturato
+├── Fonte Originale: API /api/analytics/products
+├── Query Database: [IMPLEMENTATO]
+├── Tabelle ARCA: DORig + AR ORDER BY SUM(ImportoE) DESC
+├── Calcolo: TOP 10 prodotti per fatturato periodo
+└── Status: ⚠️ QUERY IMPLEMENTATA MA NON FUNZIONALE
+
+WIDGET: Segmentazione Clienti
+├── Dato Visualizzato: Clienti per tipologia (Ristoranti, Hotel, etc)
+├── Fonte Originale: API /api/analytics/customers
+├── Query Database: [IMPLEMENTATO CON LOGICA LIKE]
+├── Tabelle ARCA: CF.Descrizione con classificazione LIKE '%RISTORANTE%'
+├── Calcolo: Categorizzazione automatica basata su ragione sociale
+└── Status: ⚠️ LOGICA IMPLEMENTATA MA NON RESTITUISCE DATI
+
+WIDGET: Tendenze Stagionali
+├── Dato Visualizzato: Previsioni domanda prodotti
+├── Fonte Originale: API /api/analytics/seasonal-trends
+├── Query Database: [IMPLEMENTATO CON DATI STORICI]
+├── Tabelle ARCA: DORig raggruppati per mese/prodotto
+├── Calcolo: Analisi quantità medie per stagionalità
+└── Status: ⚠️ ENDPOINT IMPLEMENTATO MA DATI NON VERIFICATI
+
+WIDGET: Metriche Performance
+├── Dato Visualizzato: Efficienza, Qualità, Consegne, etc
+├── Fonte Originale: API /api/analytics/performance-metrics
+├── Query Database: [MISTO REALE/CALCOLATO]
+├── Tabelle ARCA: Conteggio ordini + metriche derivate
+├── Calcolo: Algoritmi business per score qualità/efficienza
+└── Status: ⚠️ PARZIALMENTE IMPLEMENTATO
+
+================================================================================
+6. GESTIONE PRODOTTI (ModernProductsPage.jsx)
+================================================================================
+
+WIDGET: Lista Prodotti
+├── Dato Visualizzato: Elenco articoli con dettagli
+├── Fonte Originale: API /api/products o /api/arca/products
+├── Query Database: [DA VERIFICARE SE REALE]
+├── Tabelle ARCA: AR (Cd_AR, Descrizione, CostoStandard)
+├── Calcolo: SELECT * FROM AR WHERE Descrizione IS NOT NULL
+└── Status: ❌ DA VERIFICARE - PROBABILMENTE MOCK
+
+WIDGET: Codice Articolo
+├── Dato Visualizzato: Codici ARCA (es. AGL, AGLF, etc)
+├── Fonte Originale: AR.Cd_AR
+├── Query Database: [REALE SE IMPLEMENTATO]
+├── Tabelle ARCA: AR.Cd_AR (chiave primaria)
+├── Calcolo: Diretto da database
+└── Status: ✅ REALE SE ESTRATTO CORRETTAMENTE
+
+WIDGET: Descrizione Normalizzata
+├── Dato Visualizzato: Nome prodotto pulito
+├── Fonte Originale: AR.Descrizione + normalizzazione
+├── Query Database: [DA IMPLEMENTARE ALGORITMO]
+├── Tabelle ARCA: AR.Descrizione con pulizia testo
+├── Calcolo: Rimozione lotti, codici, standardizzazione nomi
+└── Status: ❌ DA IMPLEMENTARE NORMALIZZAZIONE
+
+WIDGET: Categoria Intelligente
+├── Dato Visualizzato: Categoria dedotta (Frutta, Verdura, etc)
+├── Fonte Originale: Algoritmo classificazione
+├── Query Database: [DA IMPLEMENTARE]
+├── Tabelle ARCA: AR.Cd_AR + logica categorizzazione
+├── Calcolo: Mapping codici (AGL->Bulbi, ALB->Frutta, etc)
+└── Status: ❌ DA IMPLEMENTARE ALGORITMO SMART
+
+WIDGET: Prezzo/Costo
+├── Dato Visualizzato: Prezzi unitari e costi
+├── Fonte Originale: AR.CostoStandard + DORig.PrezzoU
+├── Query Database: [DA VERIFICARE]
+├── Tabelle ARCA: Ultimo prezzo vendita da DORig
+├── Calcolo: Prezzo medio ultimo periodo
+└── Status: ❌ DA IMPLEMENTARE CALCOLO PREZZI
+
+WIDGET: Volumi Vendita
+├── Dato Visualizzato: Quantità vendute periodo
+├── Fonte Originale: SUM(DORig.Qta) per prodotto
+├── Query Database: [DA IMPLEMENTARE]
+├── Tabelle ARCA: DORig GROUP BY Cd_AR
+├── Calcolo: Somma quantità per periodo selezionato
+└── Status: ❌ DA IMPLEMENTARE
+
+WIDGET: Stagionalità
+├── Dato Visualizzato: Grafici andamento mensile
+├── Fonte Originale: Analisi storica vendite
+├── Query Database: [DA IMPLEMENTARE]
+├── Tabelle ARCA: DORig + DOTes GROUP BY MONTH(DataDoc)
+├── Calcolo: Trend vendite per mese negli anni precedenti
+└── Status: ❌ DA IMPLEMENTARE ANALISI TEMPORALE
+
+================================================================================
+7. RICONCILIAZIONE (Reconciliation.jsx)
+================================================================================
+
+WIDGET: Movimenti Bancari
+├── Dato Visualizzato: Lista movimenti importati
+├── Fonte Originale: Import CSV/Excel movimenti banca
+├── Query Database: [SQLITE LOCALE]
+├── Tabelle ARCA: Nessuna - dati esterni
+├── Calcolo: Import manuale file banca
+└── Status: ❌ DA VERIFICARE FUNZIONALITÀ IMPORT
+
+WIDGET: Partite Aperte
+├── Dato Visualizzato: Scadenze non riconciliate
+├── Fonte Originale: SC non pagate
+├── Query Database: [DA VERIFICARE]
+├── Tabelle ARCA: SC WHERE Pagata=0
+├── Calcolo: Lista crediti aperti
+└── Status: ❌ DA IMPLEMENTARE
+
+WIDGET: Riconciliazioni Automatiche
+├── Dato Visualizzato: Match movimento-partita
+├── Fonte Originale: Algoritmo matching
+├── Query Database: [DA IMPLEMENTARE]
+├── Tabelle ARCA: Confronto importi e date
+├── Calcolo: Algoritmo fuzzy matching importi/date
+└── Status: ❌ DA IMPLEMENTARE ALGORITMO
+
+WIDGET: Cash Flow
+├── Dato Visualizzato: Grafico entrate/uscite
+├── Fonte Originale: Movimenti + fatture
+├── Query Database: [DA IMPLEMENTARE]
+├── Tabelle ARCA: SC + movimenti bancari
+├── Calcolo: Timeline incassi vs pagamenti
+└── Status: ❌ DA IMPLEMENTARE
+
+================================================================================
+PROBLEMI IDENTIFICATI
+================================================================================
+
+🔥 CRITICI:
+1. API Analytics implementate ma restituiscono 0 - problema parametri SQL
+2. Clienti: solo intestazioni reali, tutti i KPI sono mock
+3. Prodotti: nomi reali ma nessuna analisi/categoria intelligente
+4. Fatture: endpoint esistenti ma dati non verificati come reali
+5. Margini: tutti fissi al 25% invece di calcoli reali
+6. Estrazione limitata: solo 100 record invece di dataset completo
+
+⚠️ DA IMPLEMENTARE:
+1. Normalizzazione intelligente nomi prodotti
+2. Categorizzazione automatica prodotti/clienti
+3. Algoritmi scoring creditizio clienti
+4. Calcoli marginalità reali da costi/prezzi
+5. Import movimenti bancari per riconciliazione
+6. Estrazione completa di TUTTI i dati ARCA
+
+🎯 AZIONI IMMEDIATE:
+1. Fix parametri SQL nelle API analytics
+2. Implementare estrazione completa clienti/prodotti
+3. Calcoli reali margini da DORig+AR
+4. Algoritmi classificazione intelligente
+5. Pulizia cache e test completo
+
+================================================================================
+RACCOMANDAZIONI TECNICHE
+================================================================================
+
+1. ESTRAZIONE DATI:
+   - Implementare ETL completo ARCA → BiHortus SQLite
+   - Schedulare sync automatico notturno
+   - Mantenere cache locale per performance
+
+2. NORMALIZZAZIONE:
+   - Algoritmo pulizia descrizioni prodotti (rimuovi lotti/codici)
+   - Mapping intelligente categorie da codici articolo
+   - Standardizzazione ragioni sociali clienti
+
+3. ALGORITMI BUSINESS:
+   - Score creditizio: ritardi/importi/frequenza pagamenti
+   - Marginalità: (PrezzoVendita - CostoStandard) / PrezzoVendita
+   - Stagionalità: analisi vendite per mese negli ultimi 3 anni
+   - Crescita cliente: confronto fatturato anno N vs N-1
+
+4. PERFORMANCE:
+   - Indicizzazione tabelle ARCA per query analytics
+   - Cache Redis per KPI real-time
+   - Aggregazioni pre-calcolate per dashboard
+
+================================================================================
+FILE GENERATO: 2025-07-05 18:35:00
+PROSSIMO STEP: Implementazione sistematica fix identificati
+================================================================================
