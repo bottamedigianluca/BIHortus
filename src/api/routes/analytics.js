@@ -26,14 +26,16 @@ router.get('/kpis', async (req, res) => {
       });
     }
 
-    // Fatturato totale periodo corrente - usando tabelle ARCA corrette
+    // Fatturato totale periodo corrente - usando documenti reali
     const currentRevenueQuery = `
       SELECT 
-        ISNULL(SUM(sc.ImportoE), 0) as totalRevenue,
-        COUNT(DISTINCT sc.Id_SC) as orderCount,
-        COUNT(DISTINCT sc.Cd_CF) as customerCount
-      FROM SC sc
-      WHERE sc.ImportoE > 0
+        ISNULL(SUM(dt.TotDocumentoE), 0) as totalRevenue,
+        COUNT(DISTINCT tes.Id_DoTes) as orderCount,
+        COUNT(DISTINCT tes.Cd_CF) as customerCount
+      FROM DOTotali dt
+      INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
+      WHERE tes.TipoDocumento IN ('F', 'B')
+        AND dt.TotDocumentoE > 0
     `;
     
     const currentResult = await arcaService.pool.request()
@@ -47,11 +49,13 @@ router.get('/kpis', async (req, res) => {
     
     const prevRevenueQuery = `
       SELECT 
-        ISNULL(SUM(sc.ImportoE), 0) as totalRevenue,
-        COUNT(DISTINCT sc.Id_SC) as orderCount
-      FROM SC sc
-      WHERE sc.ImportoE > 0
-        AND sc.Pagata = 1
+        ISNULL(SUM(dt.TotDocumentoE), 0) as totalRevenue,
+        COUNT(DISTINCT tes.Id_DoTes) as orderCount
+      FROM DOTotali dt
+      INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
+      WHERE tes.DataDoc >= ? AND tes.DataDoc < ?
+        AND tes.TipoDocumento IN ('F', 'B')
+        AND dt.TotDocumentoE > 0
     `;
     
     const prevResult = await arcaService.pool.request()
@@ -135,18 +139,16 @@ router.get('/categories', async (req, res) => {
       SELECT 
         'Frutta e Verdura' as name,
         SUM(sc.ImportoE) as value,
-        COUNT(DISTINCT sc.Id_SC) as orders,
+        COUNT(sc.Id_SC) as orders,
         25.0 as margin
       FROM SC sc
-      INNER JOIN CF cf ON sc.Cd_CF = cf.Cd_CF
       WHERE sc.ImportoE > 0
-      GROUP BY 'Frutta e Verdura'
-      ORDER BY SUM(sc.ImportoE) DESC
     `;
     
     const result = await arcaService.pool.request()
-      .input('startDate', startDate)
       .query(query);
+
+    console.log('Categories query result:', result.recordset);
 
     const colors = ['#48BB78', '#4299E1', '#ED8936', '#9F7AEA', '#F56565'];
     
