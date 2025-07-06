@@ -118,7 +118,16 @@ const CustomersManagement = () => {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [creditFilter, setCreditFilter] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [viewMode, setViewMode] = useState('grid');
+  const [sortBy, setSortBy] = useState('name');
+  const [sortOrder, setSortOrder] = useState('asc');
+  const [timePeriod, setTimePeriod] = useState('total');
+  const [summaryStats, setSummaryStats] = useState(null);
+  const [tableSortColumn, setTableSortColumn] = useState(null);
+  const [tableSortDirection, setTableSortDirection] = useState('asc');
   
   const { isOpen, onOpen, onClose } = useDisclosure();
   
@@ -136,32 +145,38 @@ const CustomersManagement = () => {
 
   useEffect(() => {
     filterCustomers();
-  }, [customers, search, typeFilter, categoryFilter]);
+  }, [customers, search, typeFilter, categoryFilter, statusFilter, creditFilter, sortBy, sortOrder]);
+
+  useEffect(() => {
+    if (customers.length > 0) {
+      calculateSummaryStats();
+    }
+  }, [customers, timePeriod]);
 
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/arca/customers');
+      const response = await fetch('/api/customers?limit=1000');
       const data = await response.json();
       
       if (data.success) {
-        // Enrich with business analytics
+        // Use real ARCA data with business analytics already included
         const enrichedCustomers = data.data.map(customer => ({
           ...customer,
           analytics: {
-            totalRevenue: Math.floor(Math.random() * 50000) + 10000,
-            avgOrderValue: Math.floor(Math.random() * 500) + 100,
-            orderFrequency: Math.floor(Math.random() * 30) + 5,
-            creditScore: Math.floor(Math.random() * 40) + 60,
-            paymentBehavior: Math.random() > 0.7 ? 'Excellent' : Math.random() > 0.4 ? 'Good' : 'Warning',
-            lastOrder: new Date(Date.now() - Math.floor(Math.random() * 30) * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            growth: (Math.random() - 0.5) * 50,
-            preferredProducts: ['Pomodori', 'Insalate', 'Frutta'],
-            seasonality: Math.random() > 0.5 ? 'Summer' : 'Winter',
-            marginContribution: Math.floor(Math.random() * 25) + 15
+            totalRevenue: customer.totalRevenue || 0,
+            avgOrderValue: Math.round((customer.totalRevenue || 0) / Math.max(1, customer.totalOrders || 1)),
+            orderFrequency: customer.totalOrders || 0,
+            creditScore: customer.creditScore || 0,
+            paymentBehavior: customer.creditScore > 80 ? 'Excellent' : customer.creditScore > 60 ? 'Good' : 'Warning',
+            lastOrder: customer.lastOrderDate || 'N/A',
+            growth: 0, // TODO: Calculate from historical data
+            preferredProducts: ['Prodotti vari'], // TODO: Get from order history
+            seasonality: 'All year',
+            marginContribution: 25 // Default margin
           },
-          status: Math.random() > 0.1 ? 'active' : Math.random() > 0.5 ? 'warning' : 'inactive',
-          riskLevel: Math.random() > 0.8 ? 'high' : Math.random() > 0.6 ? 'medium' : 'low'
+          status: customer.status === 'Paid' ? 'active' : customer.status === 'Overdue' ? 'warning' : 'active',
+          riskLevel: customer.creditScore > 80 ? 'low' : customer.creditScore > 60 ? 'medium' : 'high'
         }));
         
         setCustomers(enrichedCustomers);
@@ -176,20 +191,91 @@ const CustomersManagement = () => {
   const filterCustomers = () => {
     let filtered = customers;
     
+    // Search filter (name, code, VAT, address)
     if (search) {
+      const searchLower = search.toLowerCase();
       filtered = filtered.filter(customer =>
-        customer.Descrizione?.toLowerCase().includes(search.toLowerCase()) ||
-        customer.Cd_CF?.toLowerCase().includes(search.toLowerCase())
+        customer.name?.toLowerCase().includes(searchLower) ||
+        customer.code?.toLowerCase().includes(searchLower) ||
+        customer.vatNumber?.toLowerCase().includes(searchLower) ||
+        customer.address?.toLowerCase().includes(searchLower)
       );
     }
     
+    // Type filter
     if (typeFilter) {
       filtered = filtered.filter(customer => customer.type === typeFilter);
     }
     
+    // Category filter
     if (categoryFilter) {
       filtered = filtered.filter(customer => customer.category === categoryFilter);
     }
+    
+    // Status filter
+    if (statusFilter) {
+      filtered = filtered.filter(customer => customer.status === statusFilter);
+    }
+    
+    // Credit score filter
+    if (creditFilter) {
+      switch (creditFilter) {
+        case 'excellent':
+          filtered = filtered.filter(customer => customer.creditScore >= 80);
+          break;
+        case 'good':
+          filtered = filtered.filter(customer => customer.creditScore >= 60 && customer.creditScore < 80);
+          break;
+        case 'poor':
+          filtered = filtered.filter(customer => customer.creditScore < 60);
+          break;
+        case 'overdue':
+          filtered = filtered.filter(customer => customer.overdueInvoices > 0);
+          break;
+        case 'high_revenue':
+          filtered = filtered.filter(customer => customer.totalRevenue > 10000);
+          break;
+      }
+    }
+    
+    // Sorting
+    filtered.sort((a, b) => {
+      let aVal, bVal;
+      
+      switch (sortBy) {
+        case 'name':
+          aVal = a.name || '';
+          bVal = b.name || '';
+          break;
+        case 'revenue':
+          aVal = a.totalRevenue || 0;
+          bVal = b.totalRevenue || 0;
+          break;
+        case 'creditScore':
+          aVal = a.creditScore || 0;
+          bVal = b.creditScore || 0;
+          break;
+        case 'lastOrder':
+          aVal = a.lastOrderDate ? new Date(a.lastOrderDate) : new Date(0);
+          bVal = b.lastOrderDate ? new Date(b.lastOrderDate) : new Date(0);
+          break;
+        case 'openAmount':
+          aVal = a.openAmount || 0;
+          bVal = b.openAmount || 0;
+          break;
+        default:
+          aVal = a.name || '';
+          bVal = b.name || '';
+      }
+      
+      if (typeof aVal === 'string') {
+        aVal = aVal.toLowerCase();
+        bVal = bVal.toLowerCase();
+      }
+      
+      const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
     
     setFilteredCustomers(filtered);
   };
@@ -199,6 +285,126 @@ const CustomersManagement = () => {
       style: 'currency',
       currency: 'EUR'
     }).format(value || 0);
+  };
+
+  const calculateSummaryStats = async () => {
+    try {
+      let dateFilter = '';
+      let previousDateFilter = '';
+      const currentDate = new Date();
+      
+      switch (timePeriod) {
+        case '1year':
+          dateFilter = new Date(currentDate.getFullYear() - 1, currentDate.getMonth(), currentDate.getDate());
+          previousDateFilter = new Date(currentDate.getFullYear() - 2, currentDate.getMonth(), currentDate.getDate());
+          break;
+        case 'currentYear':
+          dateFilter = new Date(currentDate.getFullYear(), 0, 1);
+          previousDateFilter = new Date(currentDate.getFullYear() - 1, 0, 1);
+          break;
+        case '2years':
+          dateFilter = new Date(currentDate.getFullYear() - 2, currentDate.getMonth(), currentDate.getDate());
+          previousDateFilter = new Date(currentDate.getFullYear() - 4, currentDate.getMonth(), currentDate.getDate());
+          break;
+        case 'total':
+        default:
+          dateFilter = null;
+          previousDateFilter = null;
+      }
+      
+      // Calcola statistiche dal periodo corrente
+      const periodRevenue = customers.reduce((sum, customer) => {
+        if (!dateFilter) return sum + (customer.totalRevenue || 0);
+        
+        // Se abbiamo una data filtro, dovremmo fare una chiamata API specifica
+        // Per ora usiamo il fatturato totale come approssimazione
+        return sum + (customer.totalRevenue || 0);
+      }, 0);
+      
+      const activeCustomersCount = customers.filter(c => c.status === 'active').length;
+      const averageCreditScore = customers.reduce((sum, c) => sum + (c.creditScore || 0), 0) / Math.max(1, customers.length);
+      const newCustomersThisMonth = customers.filter(c => {
+        if (!c.since) return false;
+        const customerSince = new Date(c.since);
+        const thisMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+        return customerSince >= thisMonth;
+      }).length;
+      
+      setSummaryStats({
+        totalRevenue: periodRevenue,
+        revenueGrowth: 0, // Calcolo reale necessita chiamata API separata
+        totalCustomers: customers.length,
+        activeCustomers: activeCustomersCount,
+        averageCreditScore: Math.round(averageCreditScore),
+        creditScoreChange: 0, // Calcolo reale necessita dati storici
+        newCustomers: newCustomersThisMonth,
+        newCustomersGrowth: 0 // Calcolo reale necessita dati mese precedente
+      });
+      
+    } catch (error) {
+      console.error('Error calculating summary stats:', error);
+    }
+  };
+
+  const handleColumnSort = (column) => {
+    if (tableSortColumn === column) {
+      setTableSortDirection(tableSortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setTableSortColumn(column);
+      setTableSortDirection('asc');
+    }
+    
+    // Aggiorna anche il sorting principale
+    setSortBy(column);
+    setSortOrder(tableSortDirection === 'asc' ? 'desc' : 'asc');
+  };
+
+  const getSortIcon = (column) => {
+    if (tableSortColumn !== column) return null;
+    return tableSortDirection === 'asc' ? '↑' : '↓';
+  };
+
+  const exportToCSV = () => {
+    const headers = [
+      'Codice', 'Nome', 'Tipo', 'Categoria', 'P.IVA', 'Indirizzo', 
+      'Telefono', 'Email', 'Limite Credito', 'Fatturato Totale', 
+      'Ordini Totali', 'Credit Score', 'Fatture Scadute', 'Importo Scaduto', 
+      'Ultimo Ordine', 'Cliente dal', 'Stato'
+    ];
+    
+    const rows = filteredCustomers.map(customer => [
+      customer.code,
+      customer.name,
+      customer.type,
+      customer.category,
+      customer.vatNumber || '',
+      customer.address || '',
+      customer.phone || '',
+      customer.email || '',
+      customer.creditLimit || 0,
+      customer.totalRevenue || 0,
+      customer.totalOrders || 0,
+      customer.creditScore || 0,
+      customer.overdueInvoices || 0,
+      customer.openAmount || 0,
+      customer.lastOrderDate || '',
+      customer.since || '',
+      customer.status
+    ]);
+    
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(field => `"${field}"`).join(','))
+      .join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `clienti_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const getStatusColor = (status) => {
@@ -253,16 +459,16 @@ const CustomersManagement = () => {
           <HStack justify="space-between">
             <HStack>
               <Avatar 
-                name={customer.Descrizione} 
+                name={customer.name} 
                 bg={getStatusColor(customer.status) + '.500'}
                 size="md"
               />
               <VStack align="start" spacing={0}>
                 <Text fontWeight="bold" fontSize="md" noOfLines={1}>
-                  {customer.Descrizione}
+                  {customer.name}
                 </Text>
                 <Text fontSize="sm" color={textColor}>
-                  {customer.Cd_CF}
+                  {customer.code}
                 </Text>
               </VStack>
             </HStack>
@@ -281,30 +487,22 @@ const CustomersManagement = () => {
             <VStack align="start" spacing={1}>
               <Text fontSize="xs" color={textColor} fontWeight="600">FATTURATO TOTALE</Text>
               <Text fontSize="lg" fontWeight="bold" color={accentColor}>
-                {formatCurrency(customer.analytics.totalRevenue)}
+                {formatCurrency(customer.totalRevenue)}
               </Text>
-              <HStack spacing={1}>
-                <Icon 
-                  as={customer.analytics.growth > 0 ? FiTrendingUp : FiTrendingDown} 
-                  color={customer.analytics.growth > 0 ? successColor : errorColor}
-                  size="12px"
-                />
-                <Text 
-                  fontSize="xs" 
-                  color={customer.analytics.growth > 0 ? successColor : errorColor}
-                >
-                  {Math.abs(customer.analytics.growth).toFixed(1)}%
-                </Text>
-              </HStack>
+              <Text fontSize="xs" color={textColor}>
+                {timePeriod === 'total' ? 'Storico' : 
+                 timePeriod === '1year' ? 'Ultimi 12 mesi' :
+                 timePeriod === 'currentYear' ? 'Anno corrente' : 'Ultimi 2 anni'}
+              </Text>
             </VStack>
 
             <VStack align="start" spacing={1}>
               <Text fontSize="xs" color={textColor} fontWeight="600">CREDITO</Text>
               <Text fontSize="lg" fontWeight="bold" color={warningColor}>
-                {formatCurrency(customer.Limite_di_credito || 0)}
+                {formatCurrency(customer.creditLimit || 0)}
               </Text>
               <Progress 
-                value={(customer.analytics.totalRevenue / (customer.Limite_di_credito || 1)) * 100} 
+                value={(customer.analytics.totalRevenue / (customer.creditLimit || 1)) * 100} 
                 colorScheme="orange" 
                 size="sm" 
                 borderRadius="full"
@@ -403,19 +601,42 @@ const CustomersManagement = () => {
 
   const CustomerModal = ({ customer, isOpen, onClose }) => {
     if (!customer) return null;
+    
+    const [customerDetails, setCustomerDetails] = useState(null);
+    const [revenueData, setRevenueData] = useState([]);
+    const [productPreferences, setProductPreferences] = useState([]);
+    const [loading, setLoading] = useState(false);
 
-    const revenueData = Array.from({ length: 12 }, (_, i) => ({
-      month: new Date(2024, i, 1).toLocaleDateString('it-IT', { month: 'short' }),
-      revenue: Math.floor(Math.random() * 5000) + 1000,
-      orders: Math.floor(Math.random() * 20) + 5
-    }));
+    useEffect(() => {
+      if (isOpen && customer) {
+        fetchCustomerDetails();
+      }
+    }, [isOpen, customer]);
 
-    const productPreferences = [
-      { product: 'Pomodori', percentage: 35, value: 15420 },
-      { product: 'Insalate', percentage: 25, value: 11200 },
-      { product: 'Frutta', percentage: 20, value: 8900 },
-      { product: 'Altri', percentage: 20, value: 7480 }
-    ];
+    const fetchCustomerDetails = async () => {
+      try {
+        setLoading(true);
+        const [analyticsResponse, detailsResponse] = await Promise.all([
+          fetch(`/api/customers/${customer.code}/analytics?months=12`),
+          fetch(`/api/customers/${customer.code}`)
+        ]);
+        
+        if (analyticsResponse.ok && detailsResponse.ok) {
+          const analyticsData = await analyticsResponse.json();
+          const detailsData = await detailsResponse.json();
+          
+          if (analyticsData.success && detailsData.success) {
+            setCustomerDetails(detailsData.data);
+            setRevenueData(analyticsData.data.revenue_trend || []);
+            setProductPreferences(analyticsData.data.product_preferences || []);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching customer details:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
     return (
       <Modal isOpen={isOpen} onClose={onClose} size="6xl">
@@ -423,10 +644,10 @@ const CustomersManagement = () => {
         <ModalContent>
           <ModalHeader>
             <HStack>
-              <Avatar name={customer.Descrizione} bg={getStatusColor(customer.status) + '.500'} />
+              <Avatar name={customer.name} bg={getStatusColor(customer.status) + '.500'} />
               <VStack align="start" spacing={0}>
-                <Text>{customer.Descrizione}</Text>
-                <Text fontSize="sm" color={textColor}>{customer.Cd_CF}</Text>
+                <Text>{customer.name}</Text>
+                <Text fontSize="sm" color={textColor}>{customer.code}</Text>
               </VStack>
               <Spacer />
               <Badge colorScheme={getStatusColor(customer.status)} size="lg">
@@ -491,7 +712,7 @@ const CustomersManagement = () => {
                             <HStack justify="space-between">
                               <Text color={textColor}>Limite Credito:</Text>
                               <Text fontWeight="bold" color={accentColor}>
-                                {formatCurrency(customer.Limite_di_credito)}
+                                {formatCurrency(customer.creditLimit)}
                               </Text>
                             </HStack>
                             <HStack justify="space-between">
@@ -507,7 +728,7 @@ const CustomersManagement = () => {
                             <HStack justify="space-between">
                               <Text color={textColor}>Sconto:</Text>
                               <Text fontWeight="medium">
-                                {customer.Sc_tipo_riga || 0}%
+                                0%
                               </Text>
                             </HStack>
                           </VStack>
@@ -594,45 +815,51 @@ const CustomersManagement = () => {
                       </CardHeader>
                       <CardBody>
                         <Box h="300px">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={revenueData}>
-                              <CartesianGrid strokeDasharray="3 3" />
-                              <XAxis dataKey="month" />
-                              <YAxis />
-                              <RechartsTooltip 
-                                formatter={(value, name) => [
-                                  name === 'revenue' ? formatCurrency(value) : value,
-                                  name === 'revenue' ? 'Fatturato' : 'Ordini'
-                                ]}
-                              />
-                              <Area 
-                                type="monotone" 
-                                dataKey="revenue" 
-                                stroke="#0088FE" 
-                                fill="#0088FE" 
-                                fillOpacity={0.3}
-                              />
-                            </AreaChart>
-                          </ResponsiveContainer>
+                          {loading ? (
+                            <Flex justify="center" align="center" h="100%">
+                              <CircularProgress isIndeterminate />
+                            </Flex>
+                          ) : (
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart data={revenueData}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="year" />
+                                <YAxis />
+                                <RechartsTooltip 
+                                  formatter={(value, name) => [
+                                    name === 'revenue' ? formatCurrency(value) : value,
+                                    name === 'revenue' ? 'Fatturato' : 'Ordini'
+                                  ]}
+                                />
+                                <Area 
+                                  type="monotone" 
+                                  dataKey="revenue" 
+                                  stroke="#0088FE" 
+                                  fill="#0088FE" 
+                                  fillOpacity={0.3}
+                                />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          )}
                         </Box>
                       </CardBody>
                     </Card>
 
                     <SimpleGrid columns={{ base: 1, md: 3 }} spacing={4}>
                       <Stat bg={cardBg} p={4} borderRadius="lg">
-                        <StatLabel>Ordini Questo Mese</StatLabel>
-                        <StatNumber>24</StatNumber>
-                        <StatHelpText>+12% vs scorso mese</StatHelpText>
+                        <StatLabel>Ordini Totali</StatLabel>
+                        <StatNumber>{customer.totalOrders || 0}</StatNumber>
+                        <StatHelpText>Dal {customer.since}</StatHelpText>
                       </Stat>
                       <Stat bg={cardBg} p={4} borderRadius="lg">
-                        <StatLabel>Margine Medio</StatLabel>
-                        <StatNumber>{customer.analytics.marginContribution}%</StatNumber>
-                        <StatHelpText>+2.3% vs target</StatHelpText>
+                        <StatLabel>Credit Score</StatLabel>
+                        <StatNumber>{customer.creditScore}/100</StatNumber>
+                        <StatHelpText>Affidabilità pagamenti</StatHelpText>
                       </Stat>
                       <Stat bg={cardBg} p={4} borderRadius="lg">
-                        <StatLabel>Volume Totale</StatLabel>
-                        <StatNumber>1.2T</StatNumber>
-                        <StatHelpText>Ultimo trimestre</StatHelpText>
+                        <StatLabel>Fatturato Medio/Ordine</StatLabel>
+                        <StatNumber>{formatCurrency(customer.analytics.avgOrderValue)}</StatNumber>
+                        <StatHelpText>Valore medio ordini</StatHelpText>
                       </Stat>
                     </SimpleGrid>
                   </VStack>
@@ -641,12 +868,20 @@ const CustomersManagement = () => {
                 {/* Credits Tab */}
                 <TabPanel>
                   <VStack spacing={4} align="stretch">
-                    <Alert status="info" borderRadius="lg">
+                    <Alert 
+                      status={customer.status === 'Overdue' ? 'error' : customer.overdueInvoices > 0 ? 'warning' : 'success'} 
+                      borderRadius="lg"
+                    >
                       <AlertIcon />
                       <Box>
                         <Text fontWeight="bold">Situazione Creditizia</Text>
                         <Text fontSize="sm">
-                          Cliente in regola con i pagamenti - Ultimo aggiornamento: oggi
+                          {customer.status === 'Overdue' 
+                            ? `Cliente con ${customer.overdueInvoices} fatture scadute`
+                            : customer.overdueInvoices > 0 
+                              ? `${customer.overdueInvoices} fatture in scadenza`
+                              : 'Cliente in regola con i pagamenti'
+                          } - Aggiornato: {new Date().toLocaleDateString('it-IT')}
                         </Text>
                       </Box>
                     </Alert>
@@ -657,24 +892,26 @@ const CustomersManagement = () => {
                           <VStack spacing={4}>
                             <Heading size="sm">Esposizione Attuale</Heading>
                             <CircularProgress 
-                              value={75} 
-                              color="blue.400" 
+                              value={customer.creditLimit > 0 ? (customer.openAmount / customer.creditLimit * 100) : 0} 
+                              color={customer.openAmount > customer.creditLimit * 0.8 ? "red.400" : "blue.400"}
                               size="120px"
                               thickness="12px"
                             >
                               <CircularProgressLabel>
                                 <VStack spacing={0}>
-                                  <Text fontSize="lg" fontWeight="bold">75%</Text>
+                                  <Text fontSize="lg" fontWeight="bold">
+                                    {customer.creditLimit > 0 ? Math.round(customer.openAmount / customer.creditLimit * 100) : 0}%
+                                  </Text>
                                   <Text fontSize="xs">del limite</Text>
                                 </VStack>
                               </CircularProgressLabel>
                             </CircularProgress>
                             <VStack spacing={1}>
                               <Text fontSize="lg" fontWeight="bold" color={accentColor}>
-                                {formatCurrency((customer.Limite_di_credito || 0) * 0.75)}
+                                {formatCurrency(customer.openAmount || 0)}
                               </Text>
                               <Text fontSize="sm" color={textColor}>
-                                su {formatCurrency(customer.Limite_di_credito || 0)}
+                                su {formatCurrency(customer.creditLimit || 0)}
                               </Text>
                             </VStack>
                           </VStack>
@@ -688,28 +925,28 @@ const CustomersManagement = () => {
                         <CardBody>
                           <VStack spacing={3} align="stretch">
                             <HStack justify="space-between">
-                              <Text color={textColor}>A scadere (0-30gg):</Text>
-                              <Text fontWeight="bold" color={warningColor}>
-                                {formatCurrency(8500)}
+                              <Text color={textColor}>Fatture Scadute:</Text>
+                              <Text fontWeight="bold" color={errorColor}>
+                                {formatCurrency(customer.openAmount || 0)}
                               </Text>
                             </HStack>
                             <HStack justify="space-between">
-                              <Text color={textColor}>Scadute (31-60gg):</Text>
+                              <Text color={textColor}>Numero Fatture Scadute:</Text>
                               <Text fontWeight="bold" color={errorColor}>
-                                {formatCurrency(2300)}
+                                {customer.overdueInvoices || 0}
                               </Text>
                             </HStack>
                             <HStack justify="space-between">
-                              <Text color={textColor}>Oltre 60gg:</Text>
-                              <Text fontWeight="bold" color={errorColor}>
-                                {formatCurrency(500)}
+                              <Text color={textColor}>Ritardo Medio Pagamenti:</Text>
+                              <Text fontWeight="bold" color={customer.paymentDelay > 0 ? errorColor : successColor}>
+                                {Math.round(customer.paymentDelay || 0)} giorni
                               </Text>
                             </HStack>
                             <Divider />
                             <HStack justify="space-between">
                               <Text fontWeight="bold">Totale Esposizione:</Text>
                               <Text fontWeight="bold" fontSize="lg" color={accentColor}>
-                                {formatCurrency(11300)}
+                                {formatCurrency(customer.openAmount || 0)}
                               </Text>
                             </HStack>
                           </VStack>
@@ -730,21 +967,24 @@ const CustomersManagement = () => {
                         <VStack spacing={4} align="stretch">
                           <HStack justify="space-between">
                             <Text>Puntualità Pagamenti:</Text>
-                            <Badge colorScheme="green" variant="solid">Eccellente</Badge>
+                            <Badge 
+                              colorScheme={customer.analytics.paymentBehavior === 'Excellent' ? 'green' : 
+                                         customer.analytics.paymentBehavior === 'Good' ? 'blue' : 'red'} 
+                              variant="solid"
+                            >
+                              {customer.analytics.paymentBehavior}
+                            </Badge>
                           </HStack>
                           <HStack justify="space-between">
-                            <Text>Stagionalità:</Text>
-                            <Text fontWeight="medium">{customer.analytics.seasonality} focused</Text>
+                            <Text>Cliente dal:</Text>
+                            <Text fontWeight="medium">{customer.since}</Text>
                           </HStack>
                           <HStack justify="space-between">
-                            <Text>Crescita Anno:</Text>
-                            <HStack>
-                              <Icon as={FiTrendingUp} color={successColor} />
-                              <Text color={successColor} fontWeight="bold">+12.5%</Text>
-                            </HStack>
+                            <Text>Ultimo Ordine:</Text>
+                            <Text fontWeight="medium">{customer.lastOrderDate || 'Mai'}</Text>
                           </HStack>
                           <HStack justify="space-between">
-                            <Text>Rischio:</Text>
+                            <Text>Livello Rischio:</Text>
                             <Badge colorScheme={getRiskColor(customer.riskLevel)}>
                               {customer.riskLevel}
                             </Badge>
@@ -759,18 +999,36 @@ const CustomersManagement = () => {
                       </CardHeader>
                       <CardBody>
                         <VStack spacing={3} align="stretch">
-                          <Alert status="success" size="sm" borderRadius="md">
-                            <AlertIcon />
-                            <Text fontSize="sm">Aumentare limite credito del 20%</Text>
-                          </Alert>
-                          <Alert status="info" size="sm" borderRadius="md">
-                            <AlertIcon />
-                            <Text fontSize="sm">Proporre contratto stagionale</Text>
-                          </Alert>
-                          <Alert status="warning" size="sm" borderRadius="md">
-                            <AlertIcon />
-                            <Text fontSize="sm">Monitorare pagamenti fino a 30gg</Text>
-                          </Alert>
+                          {customer.creditScore > 80 && customer.openAmount === 0 && (
+                            <Alert status="success" size="sm" borderRadius="md">
+                              <AlertIcon />
+                              <Text fontSize="sm">Cliente affidabile - Considerare aumento limite credito</Text>
+                            </Alert>
+                          )}
+                          {customer.overdueInvoices > 0 && (
+                            <Alert status="warning" size="sm" borderRadius="md">
+                              <AlertIcon />
+                              <Text fontSize="sm">Attenzione: {customer.overdueInvoices} fatture scadute da verificare</Text>
+                            </Alert>
+                          )}
+                          {customer.paymentDelay > 30 && (
+                            <Alert status="error" size="sm" borderRadius="md">
+                              <AlertIcon />
+                              <Text fontSize="sm">Ritardi pagamenti elevati - Valutare riduzione credito</Text>
+                            </Alert>
+                          )}
+                          {customer.totalOrders === 0 && (
+                            <Alert status="info" size="sm" borderRadius="md">
+                              <AlertIcon />
+                              <Text fontSize="sm">Cliente senza ordini - Contattare per riattivazione</Text>
+                            </Alert>
+                          )}
+                          {!customer.overdueInvoices && customer.creditScore > 70 && customer.totalOrders > 10 && (
+                            <Alert status="success" size="sm" borderRadius="md">
+                              <AlertIcon />
+                              <Text fontSize="sm">Cliente in regola - Valutare offerte commerciali dedicate</Text>
+                            </Alert>
+                          )}
                         </VStack>
                       </CardBody>
                     </Card>
@@ -785,26 +1043,61 @@ const CustomersManagement = () => {
                     </CardHeader>
                     <CardBody>
                       <VStack spacing={3} align="stretch">
-                        {[
-                          { date: '2024-07-05', action: 'Pagamento ricevuto', amount: 2500, type: 'payment' },
-                          { date: '2024-07-03', action: 'Ordine confermato', amount: 1200, type: 'order' },
-                          { date: '2024-07-01', action: 'Fattura emessa', amount: 3400, type: 'invoice' },
-                          { date: '2024-06-28', action: 'Pagamento ricevuto', amount: 1800, type: 'payment' }
-                        ].map((activity, index) => (
-                          <HStack key={index} p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
-                            <Icon 
-                              as={activity.type === 'payment' ? FiDollarSign : activity.type === 'order' ? FiShoppingCart : FiCalendar}
-                              color={activity.type === 'payment' ? successColor : accentColor}
-                            />
-                            <VStack align="start" spacing={0} flex="1">
-                              <Text fontSize="sm" fontWeight="medium">{activity.action}</Text>
-                              <Text fontSize="xs" color={textColor}>{activity.date}</Text>
-                            </VStack>
-                            <Text fontWeight="bold" color={accentColor}>
-                              {formatCurrency(activity.amount)}
-                            </Text>
-                          </HStack>
-                        ))}
+                        {loading ? (
+                          <Flex justify="center" p={8}>
+                            <CircularProgress isIndeterminate />
+                          </Flex>
+                        ) : (
+                          <>
+                            <HStack p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
+                              <Icon as={FiCalendar} color={accentColor} />
+                              <VStack align="start" spacing={0} flex="1">
+                                <Text fontSize="sm" fontWeight="medium">Cliente attivo dal</Text>
+                                <Text fontSize="xs" color={textColor}>{customer.since}</Text>
+                              </VStack>
+                              <Text fontWeight="bold" color={accentColor}>
+                                {customer.totalOrders} ordini
+                              </Text>
+                            </HStack>
+                            
+                            {customer.lastOrderDate && (
+                              <HStack p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
+                                <Icon as={FiShoppingCart} color={successColor} />
+                                <VStack align="start" spacing={0} flex="1">
+                                  <Text fontSize="sm" fontWeight="medium">Ultimo ordine</Text>
+                                  <Text fontSize="xs" color={textColor}>{customer.lastOrderDate}</Text>
+                                </VStack>
+                                <Text fontWeight="bold" color={accentColor}>
+                                  {formatCurrency(customer.analytics.avgOrderValue)}
+                                </Text>
+                              </HStack>
+                            )}
+                            
+                            {customer.openAmount > 0 && (
+                              <HStack p={3} bg={useColorModeValue('red.50', 'red.900')} borderRadius="md">
+                                <Icon as={FiAlertTriangle} color={errorColor} />
+                                <VStack align="start" spacing={0} flex="1">
+                                  <Text fontSize="sm" fontWeight="medium">Fatture scadute</Text>
+                                  <Text fontSize="xs" color={textColor}>{customer.overdueInvoices} fatture</Text>
+                                </VStack>
+                                <Text fontWeight="bold" color={errorColor}>
+                                  {formatCurrency(customer.openAmount)}
+                                </Text>
+                              </HStack>
+                            )}
+                            
+                            <HStack p={3} bg={useColorModeValue('blue.50', 'blue.900')} borderRadius="md">
+                              <Icon as={FiDollarSign} color={accentColor} />
+                              <VStack align="start" spacing={0} flex="1">
+                                <Text fontSize="sm" fontWeight="medium">Fatturato totale</Text>
+                                <Text fontSize="xs" color={textColor}>Storico completo</Text>
+                              </VStack>
+                              <Text fontWeight="bold" color={accentColor}>
+                                {formatCurrency(customer.totalRevenue)}
+                              </Text>
+                            </HStack>
+                          </>
+                        )}
                       </VStack>
                     </CardBody>
                   </Card>
@@ -817,10 +1110,7 @@ const CustomersManagement = () => {
     );
   };
 
-  // Summary stats
-  const totalRevenue = filteredCustomers.reduce((sum, c) => sum + c.analytics.totalRevenue, 0);
-  const averageCreditScore = filteredCustomers.reduce((sum, c) => sum + c.analytics.creditScore, 0) / filteredCustomers.length || 0;
-  const activeCustomers = filteredCustomers.filter(c => c.status === 'active').length;
+  // Summary stats are now calculated in calculateSummaryStats function
 
   const customerTypes = [...new Set(customers.map(c => c.type))].filter(Boolean);
 
@@ -839,113 +1129,273 @@ const CustomersManagement = () => {
           </Box>
           
           <HStack spacing={3}>
-            <Button leftIcon={<FiPlus />} colorScheme="blue" size="md">
-              Nuovo Cliente
-            </Button>
-            <Button leftIcon={<FiDownload />} variant="outline" size="md">
-              Esporta
-            </Button>
-            <Button leftIcon={<FiRefreshCw />} variant="outline" size="md" onClick={fetchCustomers}>
+            <Menu>
+              <MenuButton as={Button} leftIcon={<FiPlus />} colorScheme="blue" size="md">
+                Nuovo Cliente
+              </MenuButton>
+              <MenuList>
+                <MenuItem icon={<FiEdit />}>Inserimento Manuale</MenuItem>
+                <MenuItem icon={<FiDownload />}>Importa da CSV</MenuItem>
+              </MenuList>
+            </Menu>
+            
+            <Menu>
+              <MenuButton as={Button} leftIcon={<FiDownload />} variant="outline" size="md">
+                Esporta
+              </MenuButton>
+              <MenuList>
+                <MenuItem icon={<FiDownload />} onClick={exportToCSV}>
+                  Esporta CSV ({filteredCustomers.length} clienti)
+                </MenuItem>
+                <MenuItem icon={<FiDownload />}>Esporta Excel</MenuItem>
+                <MenuItem icon={<FiDownload />}>Esporta PDF</MenuItem>
+              </MenuList>
+            </Menu>
+            
+            <Button 
+              leftIcon={<FiRefreshCw />} 
+              variant="outline" 
+              size="md" 
+              onClick={fetchCustomers}
+              isLoading={loading}
+            >
               Aggiorna
             </Button>
           </HStack>
         </Flex>
 
+        {/* Time Period Filter */}
+        <Card bg={cardBg} shadow="lg" borderRadius="xl">
+          <CardBody>
+            <HStack spacing={4} justify="space-between">
+              <Text fontWeight="bold" color={accentColor}>Periodo di Analisi:</Text>
+              <HStack spacing={2}>
+                <ButtonGroup isAttached variant="outline" size="sm">
+                  <Button 
+                    isActive={timePeriod === '1year'}
+                    onClick={() => setTimePeriod('1year')}
+                  >
+                    Ultimi 12 Mesi
+                  </Button>
+                  <Button 
+                    isActive={timePeriod === 'currentYear'}
+                    onClick={() => setTimePeriod('currentYear')}
+                  >
+                    Anno Corrente
+                  </Button>
+                  <Button 
+                    isActive={timePeriod === '2years'}
+                    onClick={() => setTimePeriod('2years')}
+                  >
+                    Ultimi 2 Anni
+                  </Button>
+                  <Button 
+                    isActive={timePeriod === 'total'}
+                    onClick={() => setTimePeriod('total')}
+                  >
+                    Totale Storico
+                  </Button>
+                </ButtonGroup>
+              </HStack>
+            </HStack>
+          </CardBody>
+        </Card>
+
         {/* Summary Stats */}
         <SimpleGrid columns={{ base: 1, md: 4 }} spacing={6}>
           <Stat bg={cardBg} p={6} borderRadius="xl" shadow="lg">
             <StatLabel color={textColor}>Clienti Totali</StatLabel>
-            <StatNumber fontSize="3xl" color={accentColor}>{filteredCustomers.length}</StatNumber>
-            <StatHelpText>{activeCustomers} attivi</StatHelpText>
+            <StatNumber fontSize="3xl" color={accentColor}>
+              {summaryStats ? summaryStats.totalCustomers : customers.length}
+            </StatNumber>
+            <StatHelpText>
+              {summaryStats ? summaryStats.activeCustomers : filteredCustomers.filter(c => c.status === 'active').length} attivi
+            </StatHelpText>
           </Stat>
           
           <Stat bg={cardBg} p={6} borderRadius="xl" shadow="lg">
-            <StatLabel color={textColor}>Fatturato Totale</StatLabel>
+            <StatLabel color={textColor}>
+              Fatturato {timePeriod === 'total' ? 'Totale' : 
+                       timePeriod === '1year' ? '(12 Mesi)' :
+                       timePeriod === 'currentYear' ? '(Anno Corrente)' : '(2 Anni)'}
+            </StatLabel>
             <StatNumber fontSize="3xl" color={successColor}>
-              {formatCurrency(totalRevenue)}
+              {formatCurrency(summaryStats ? summaryStats.totalRevenue : 0)}
             </StatNumber>
             <StatHelpText>
-              <StatArrow type="increase" />
-              12.5% vs anno scorso
+              {summaryStats && summaryStats.revenueGrowth !== 0 && (
+                <>
+                  <StatArrow type={summaryStats.revenueGrowth > 0 ? "increase" : "decrease"} />
+                  {Math.abs(summaryStats.revenueGrowth).toFixed(1)}% vs periodo precedente
+                </>
+              )}
             </StatHelpText>
           </Stat>
           
           <Stat bg={cardBg} p={6} borderRadius="xl" shadow="lg">
             <StatLabel color={textColor}>Credit Score Medio</StatLabel>
             <StatNumber fontSize="3xl" color={warningColor}>
-              {averageCreditScore.toFixed(0)}
+              {summaryStats ? summaryStats.averageCreditScore : Math.round(customers.reduce((sum, c) => sum + (c.creditScore || 0), 0) / Math.max(1, customers.length))}
             </StatNumber>
             <StatHelpText>
-              <StatArrow type="increase" />
-              +3 punti
+              Su base {customers.length} clienti
             </StatHelpText>
           </Stat>
           
           <Stat bg={cardBg} p={6} borderRadius="xl" shadow="lg">
             <StatLabel color={textColor}>Nuovi Questo Mese</StatLabel>
-            <StatNumber fontSize="3xl" color={accentColor}>8</StatNumber>
-            <StatHelpText>+33% vs mese scorso</StatHelpText>
+            <StatNumber fontSize="3xl" color={accentColor}>
+              {summaryStats ? summaryStats.newCustomers : 0}
+            </StatNumber>
+            <StatHelpText>
+              Clienti acquisiti nel mese
+            </StatHelpText>
           </Stat>
         </SimpleGrid>
 
         {/* Filters */}
         <Card bg={cardBg} shadow="lg" borderRadius="xl">
           <CardBody>
-            <HStack spacing={4} flexWrap="wrap">
-              <InputGroup maxW="300px">
-                <InputLeftElement>
-                  <Icon as={FiSearch} color={textColor} />
-                </InputLeftElement>
-                <Input
-                  placeholder="Cerca clienti..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </InputGroup>
-              
-              <Select 
-                placeholder="Tutti i tipi" 
-                value={typeFilter} 
-                onChange={(e) => setTypeFilter(e.target.value)}
-                maxW="200px"
-              >
-                {customerTypes.map(type => (
-                  <option key={type} value={type}>{type}</option>
-                ))}
-              </Select>
-              
-              <Select 
-                placeholder="Tutte le categorie" 
-                value={categoryFilter} 
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                maxW="200px"
-              >
-                <option value="A">Categoria A</option>
-                <option value="B">Categoria B</option>
-                <option value="C">Categoria C</option>
-              </Select>
-              
-              <ButtonGroup isAttached variant="outline">
-                <Button 
-                  leftIcon={<FiUsers />}
-                  isActive={viewMode === 'grid'} 
-                  onClick={() => setViewMode('grid')}
+            <VStack spacing={4} align="stretch">
+              {/* Primary filters */}
+              <HStack spacing={4} flexWrap="wrap">
+                <InputGroup maxW="300px">
+                  <InputLeftElement>
+                    <Icon as={FiSearch} color={textColor} />
+                  </InputLeftElement>
+                  <Input
+                    placeholder="Cerca per nome, codice, P.IVA..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </InputGroup>
+                
+                <Select 
+                  placeholder="Tutti i tipi" 
+                  value={typeFilter} 
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  maxW="200px"
                 >
-                  Griglia
-                </Button>
-                <Button 
-                  leftIcon={<FiBarChart />}
-                  isActive={viewMode === 'list'} 
-                  onClick={() => setViewMode('list')}
+                  {customerTypes.map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </Select>
+                
+                <Select 
+                  placeholder="Tutte le categorie" 
+                  value={categoryFilter} 
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  maxW="200px"
                 >
-                  Lista
+                  <option value="Standard">Standard</option>
+                  <option value="Premium">Premium</option>
+                  <option value="VIP">VIP</option>
+                </Select>
+                
+                <ButtonGroup isAttached variant="outline">
+                  <Button 
+                    leftIcon={<FiUsers />}
+                    isActive={viewMode === 'grid'} 
+                    onClick={() => setViewMode('grid')}
+                  >
+                    Griglia
+                  </Button>
+                  <Button 
+                    leftIcon={<FiBarChart />}
+                    isActive={viewMode === 'list'} 
+                    onClick={() => setViewMode('list')}
+                  >
+                    Lista
+                  </Button>
+                </ButtonGroup>
+                
+                <Button 
+                  leftIcon={<FiFilter />} 
+                  variant="outline"
+                  onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                  colorScheme={showAdvancedFilters ? 'blue' : 'gray'}
+                >
+                  Filtri Avanzati
                 </Button>
-              </ButtonGroup>
+                
+                {(search || typeFilter || categoryFilter || statusFilter || creditFilter) && (
+                  <Button 
+                    leftIcon={<FiRefreshCw />} 
+                    variant="ghost" 
+                    onClick={() => {
+                      setSearch('');
+                      setTypeFilter('');
+                      setCategoryFilter('');
+                      setStatusFilter('');
+                      setCreditFilter('');
+                    }}
+                  >
+                    Reset
+                  </Button>
+                )}
+              </HStack>
               
-              <Button leftIcon={<FiFilter />} variant="outline">
-                Filtri Avanzati
-              </Button>
-            </HStack>
+              {/* Advanced filters */}
+              {showAdvancedFilters && (
+                <HStack spacing={4} flexWrap="wrap" p={4} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
+                  <Select 
+                    placeholder="Tutti gli stati" 
+                    value={statusFilter} 
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    maxW="200px"
+                  >
+                    <option value="active">Attivi</option>
+                    <option value="warning">In allerta</option>
+                    <option value="inactive">Inattivi</option>
+                  </Select>
+                  
+                  <Select 
+                    placeholder="Filtra per credito" 
+                    value={creditFilter} 
+                    onChange={(e) => setCreditFilter(e.target.value)}
+                    maxW="200px"
+                  >
+                    <option value="excellent">Credit Score Eccellente (80+)</option>
+                    <option value="good">Credit Score Buono (60-79)</option>
+                    <option value="poor">Credit Score Basso (&lt;60)</option>
+                    <option value="overdue">Con fatture scadute</option>
+                    <option value="high_revenue">Alto fatturato (&gt;10k)</option>
+                  </Select>
+                  
+                  <Select 
+                    placeholder="Ordina per" 
+                    value={sortBy} 
+                    onChange={(e) => setSortBy(e.target.value)}
+                    maxW="200px"
+                  >
+                    <option value="name">Nome</option>
+                    <option value="revenue">Fatturato</option>
+                    <option value="creditScore">Credit Score</option>
+                    <option value="lastOrder">Ultimo Ordine</option>
+                    <option value="openAmount">Importo Scaduto</option>
+                  </Select>
+                  
+                  <ButtonGroup isAttached size="sm">
+                    <Button 
+                      variant={sortOrder === 'asc' ? 'solid' : 'outline'}
+                      onClick={() => setSortOrder('asc')}
+                    >
+                      ↑ ASC
+                    </Button>
+                    <Button 
+                      variant={sortOrder === 'desc' ? 'solid' : 'outline'}
+                      onClick={() => setSortOrder('desc')}
+                    >
+                      ↓ DESC
+                    </Button>
+                  </ButtonGroup>
+                  
+                  <Text fontSize="sm" color={textColor}>
+                    Trovati: <strong>{filteredCustomers.length}</strong> su {customers.length} clienti
+                  </Text>
+                </HStack>
+              )}
+            </VStack>
           </CardBody>
         </Card>
 
@@ -960,7 +1410,7 @@ const CustomersManagement = () => {
         ) : viewMode === 'grid' ? (
           <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={6}>
             {filteredCustomers.map(customer => (
-              <CustomerCard key={customer.Cd_CF} customer={customer} />
+              <CustomerCard key={customer.code} customer={customer} />
             ))}
           </SimpleGrid>
         ) : (
@@ -970,23 +1420,55 @@ const CustomersManagement = () => {
                 <Table variant="simple">
                   <Thead>
                     <Tr>
-                      <Th>Cliente</Th>
-                      <Th>Tipo</Th>
-                      <Th isNumeric>Fatturato</Th>
-                      <Th isNumeric>Credito</Th>
-                      <Th>Status</Th>
+                      <Th 
+                        cursor="pointer" 
+                        _hover={{ bg: useColorModeValue('gray.50', 'gray.700') }}
+                        onClick={() => handleColumnSort('name')}
+                      >
+                        Cliente {getSortIcon('name')}
+                      </Th>
+                      <Th 
+                        cursor="pointer" 
+                        _hover={{ bg: useColorModeValue('gray.50', 'gray.700') }}
+                        onClick={() => handleColumnSort('type')}
+                      >
+                        Tipo {getSortIcon('type')}
+                      </Th>
+                      <Th 
+                        isNumeric 
+                        cursor="pointer" 
+                        _hover={{ bg: useColorModeValue('gray.50', 'gray.700') }}
+                        onClick={() => handleColumnSort('revenue')}
+                      >
+                        Fatturato {getSortIcon('revenue')}
+                      </Th>
+                      <Th 
+                        isNumeric 
+                        cursor="pointer" 
+                        _hover={{ bg: useColorModeValue('gray.50', 'gray.700') }}
+                        onClick={() => handleColumnSort('creditScore')}
+                      >
+                        Credit Score {getSortIcon('creditScore')}
+                      </Th>
+                      <Th 
+                        cursor="pointer" 
+                        _hover={{ bg: useColorModeValue('gray.50', 'gray.700') }}
+                        onClick={() => handleColumnSort('status')}
+                      >
+                        Status {getSortIcon('status')}
+                      </Th>
                       <Th>Azioni</Th>
                     </Tr>
                   </Thead>
                   <Tbody>
                     {filteredCustomers.map(customer => (
-                      <Tr key={customer.Cd_CF}>
+                      <Tr key={customer.code}>
                         <Td>
                           <HStack>
-                            <Avatar name={customer.Descrizione} size="sm" />
+                            <Avatar name={customer.name} size="sm" />
                             <VStack align="start" spacing={0}>
-                              <Text fontWeight="medium">{customer.Descrizione}</Text>
-                              <Text fontSize="sm" color={textColor}>{customer.Cd_CF}</Text>
+                              <Text fontWeight="medium">{customer.name}</Text>
+                              <Text fontSize="sm" color={textColor}>{customer.code}</Text>
                             </VStack>
                           </HStack>
                         </Td>
@@ -997,9 +1479,11 @@ const CustomersManagement = () => {
                           </HStack>
                         </Td>
                         <Td isNumeric fontWeight="bold" color={accentColor}>
-                          {formatCurrency(customer.analytics.totalRevenue)}
+                          {formatCurrency(customer.totalRevenue)}
                         </Td>
-                        <Td isNumeric>{formatCurrency(customer.Limite_di_credito)}</Td>
+                        <Td isNumeric fontWeight="bold" color={customer.creditScore > 80 ? successColor : customer.creditScore > 60 ? warningColor : errorColor}>
+                          {customer.creditScore}/100
+                        </Td>
                         <Td>
                           <Badge colorScheme={getStatusColor(customer.status)}>
                             {customer.status}

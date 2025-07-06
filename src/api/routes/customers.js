@@ -1,13 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const arcaService = require('../../services/database/arca');
-const DataService = require('../../services/dataService.cjs');
 const { logger } = require('../../utils/logger');
 
 // Get all customers from ARCA
 router.get('/', async (req, res) => {
   try {
-    const { page = 1, limit = 100, search, type, category } = req.query;
+    const { page = 1, limit = 1000, search, type, category } = req.query;
     
     logger.info('📋 Fetching customers from ARCA database');
     
@@ -31,11 +30,28 @@ router.get('/', async (req, res) => {
         
         // Enrich data with REAL business calculations from ARCA
         const enrichedCustomers = await Promise.all(customers.map(async (customer) => {
-          // Calculate real total revenue for customer
+          // Calculate real total revenue for customer - LOGIC CORRECTED
+          const currentMonth = new Date().getMonth() + 1;
+          const currentYear = new Date().getFullYear();
+          
           const revenueQuery = `
             SELECT 
-              ISNULL(SUM(dt.TotDocumentoE), 0) as totalRevenue,
-              COUNT(DISTINCT tes.Id_DoTes) as totalOrders,
+              ISNULL(SUM(
+                CASE 
+                  -- Current month: DDT + IVA (immediate cash flow)
+                  WHEN MONTH(tes.DataDoc) = @currentMonth AND YEAR(tes.DataDoc) = @currentYear
+                    AND tes.TipoDocumento = 'B' THEN dt.TotDocumentoE
+                  -- Historical months: only Fatture (final invoices)  
+                  WHEN NOT (MONTH(tes.DataDoc) = @currentMonth AND YEAR(tes.DataDoc) = @currentYear)
+                    AND tes.TipoDocumento = 'F' THEN dt.TotDocumentoE
+                  ELSE 0
+                END
+              ), 0) as totalRevenue,
+              COUNT(DISTINCT 
+                CASE 
+                  WHEN tes.TipoDocumento IN ('F', 'B') THEN tes.Id_DoTes 
+                END
+              ) as totalOrders,
               MAX(tes.DataDoc) as lastOrderDate,
               MIN(tes.DataDoc) as firstOrderDate
             FROM DOTotali dt
@@ -48,6 +64,8 @@ router.get('/', async (req, res) => {
 
           const revenueResult = await arcaService.pool.request()
             .input('customerCode', customer.Cd_CF)
+            .input('currentMonth', currentMonth)
+            .input('currentYear', currentYear)
             .query(revenueQuery);
 
           // Calculate credit score based on payment history
@@ -128,20 +146,13 @@ router.get('/', async (req, res) => {
         throw new Error('ARCA not connected');
       }
     } catch (arcaError) {
-      logger.warn('ARCA not available, using mock data', arcaError.message);
+      logger.error('ARCA not available, no fallback to mock data', arcaError.message);
       
-      // Use mock data from DataService
-      const mockCustomers = DataService.getCustomers();
-      
-      res.json({
-        success: true,
-        data: mockCustomers,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: mockCustomers.length,
-          pages: Math.ceil(mockCustomers.length / limit)
-        }
+      res.status(503).json({
+        success: false,
+        error: 'ARCA database not available',
+        message: 'Cannot fetch customers - ARCA connection required',
+        details: arcaError.message
       });
     }
     
