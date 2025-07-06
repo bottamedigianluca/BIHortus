@@ -146,28 +146,27 @@ router.get('/passive', async (req, res) => {
     const params = [];
     
     // Add filters
+    const request = arcaService.pool.request();
+    
     if (supplier) {
-      query += ` AND (CF.Descrizione LIKE ? OR DOTes.Cd_CF = ?)`;
-      params.push(`%${supplier}%`, supplier);
+      query += ` AND (cf.Descrizione LIKE @supplier OR sc.Cd_CF = @supplierCode)`;
+      request.input('supplier', `%${supplier}%`);
+      request.input('supplierCode', supplier);
     }
     
     if (dateFrom) {
-      query += ` AND DOTes.Data_documento >= ?`;
-      params.push(dateFrom);
+      query += ` AND sc.DataFattura >= @dateFrom`;
+      request.input('dateFrom', dateFrom);
     }
     
     if (dateTo) {
-      query += ` AND DOTes.Data_documento <= ?`;
-      params.push(dateTo);
+      query += ` AND sc.DataFattura <= @dateTo`;
+      request.input('dateTo', dateTo);
     }
     
-    query += ` ORDER BY DOTes.Data_documento DESC`;
+    query += ` ORDER BY sc.DataScadenza ASC`;
     
-    // Add pagination
-    const offset = (page - 1) * limit;
-    query += ` OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
-    
-    const result = await arcaService.query(query, params);
+    const result = await request.query(query);
     
     // Enrich invoices
     const enrichedInvoices = result.recordset.map(invoice => ({
@@ -214,10 +213,12 @@ router.get('/:number', async (req, res) => {
         CF.Partita_IVA
       FROM DOTes
       INNER JOIN CF ON DOTes.Cd_CF = CF.Cd_CF
-      WHERE DOTes.Numero_documento = ?
+      WHERE DOTes.Numero_documento = @number
     `;
     
-    const headerResult = await arcaService.query(headerQuery, [number]);
+    const headerResult = await arcaService.pool.request()
+      .input('number', number)
+      .query(headerQuery);
     
     if (headerResult.recordset.length === 0) {
       return res.status(404).json({
@@ -235,11 +236,13 @@ router.get('/:number', async (req, res) => {
         AR.Categoria as productCategory
       FROM DORig
       INNER JOIN AR ON DORig.Cd_AR = AR.Cd_AR
-      WHERE DORig.Numero_documento = ?
+      WHERE DORig.Id_DOTes = @idDoTes
       ORDER BY DORig.Riga
     `;
     
-    const linesResult = await arcaService.query(linesQuery, [number]);
+    const linesResult = await arcaService.pool.request()
+      .input('idDoTes', headerResult.recordset[0].Id_DoTes)
+      .query(linesQuery);
     
     const invoice = {
       header: headerResult.recordset[0],
@@ -288,12 +291,14 @@ router.get('/analytics/summary', async (req, res) => {
       INNER JOIN CF ON DOTes.Cd_CF = CF.Cd_CF
       WHERE DOTes.Tipo_documento IN ${docTypes}
         AND CF.${customerType} = 1
-        AND DOTes.Data_documento >= DATEADD(month, -?, GETDATE())
+        AND DOTes.Data_documento >= DATEADD(month, -@months, GETDATE())
       GROUP BY YEAR(DOTes.Data_documento), MONTH(DOTes.Data_documento)
       ORDER BY year, month
     `;
     
-    const trendsResult = await arcaService.query(trendsQuery, [months]);
+    const trendsResult = await arcaService.pool.request()
+      .input('months', months)
+      .query(trendsQuery);
     
     // Top customers/suppliers
     const topQuery = `
@@ -307,12 +312,14 @@ router.get('/analytics/summary', async (req, res) => {
       INNER JOIN CF ON DOTes.Cd_CF = CF.Cd_CF
       WHERE DOTes.Tipo_documento IN ${docTypes}
         AND CF.${customerType} = 1
-        AND DOTes.Data_documento >= DATEADD(month, -?, GETDATE())
+        AND DOTes.Data_documento >= DATEADD(month, -@months, GETDATE())
       GROUP BY CF.Cd_CF, CF.Descrizione
       ORDER BY total_amount DESC
     `;
     
-    const topResult = await arcaService.query(topQuery, [months]);
+    const topResult = await arcaService.pool.request()
+      .input('months', months)
+      .query(topQuery);
     
     // Status distribution
     const statusQuery = `
@@ -324,11 +331,13 @@ router.get('/analytics/summary', async (req, res) => {
       INNER JOIN CF ON DOTes.Cd_CF = CF.Cd_CF
       WHERE DOTes.Tipo_documento IN ${docTypes}
         AND CF.${customerType} = 1
-        AND DOTes.Data_documento >= DATEADD(month, -?, GETDATE())
+        AND DOTes.Data_documento >= DATEADD(month, -@months, GETDATE())
       GROUP BY DOTes.Stato_documento
     `;
     
-    const statusResult = await arcaService.query(statusQuery, [months]);
+    const statusResult = await arcaService.pool.request()
+      .input('months', months)
+      .query(statusQuery);
     
     res.json({
       success: true,

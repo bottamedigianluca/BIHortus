@@ -48,7 +48,7 @@ function App() {
               <Sidebar />
               
               {/* Main Content */}
-              <Box flex="1" ml={60}>
+              <Box flex="1" ml="240px">
                 <Header />
                 
                 <Box>

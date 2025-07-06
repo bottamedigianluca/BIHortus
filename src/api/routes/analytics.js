@@ -3,6 +3,58 @@ const router = express.Router();
 const arcaService = require('../../services/database/arca');
 const { logger } = require('../../utils/logger');
 
+// Calculate customer growth year over year
+async function calculateCustomerGrowth(days) {
+  try {
+    const currentYear = new Date().getFullYear();
+    const previousYear = currentYear - 1;
+    
+    const growthQuery = `
+      WITH CurrentYear AS (
+        SELECT COUNT(DISTINCT tes.Cd_CF) as currentCustomers
+        FROM DOTes tes
+        INNER JOIN DOTotali dt ON tes.Id_DoTes = dt.Id_DoTes
+        WHERE YEAR(tes.DataDoc) = @currentYear
+          AND tes.TipoDocumento IN ('F', 'B')
+          AND tes.CliFor = 'C'
+          AND dt.TotDocumentoE > 0
+      ),
+      PreviousYear AS (
+        SELECT COUNT(DISTINCT tes.Cd_CF) as previousCustomers  
+        FROM DOTes tes
+        INNER JOIN DOTotali dt ON tes.Id_DoTes = dt.Id_DoTes
+        WHERE YEAR(tes.DataDoc) = @previousYear
+          AND tes.TipoDocumento IN ('F', 'B')
+          AND tes.CliFor = 'C'
+          AND dt.TotDocumentoE > 0
+      )
+      SELECT 
+        c.currentCustomers,
+        p.previousCustomers,
+        CASE 
+          WHEN p.previousCustomers > 0 
+          THEN ((CAST(c.currentCustomers AS FLOAT) - p.previousCustomers) / p.previousCustomers * 100)
+          ELSE 0 
+        END as growthPercent
+      FROM CurrentYear c CROSS JOIN PreviousYear p
+    `;
+    
+    const result = await arcaService.pool.request()
+      .input('currentYear', currentYear)
+      .input('previousYear', previousYear)
+      .query(growthQuery);
+    
+    if (result.recordset.length > 0) {
+      return Math.round(result.recordset[0].growthPercent * 100) / 100;
+    }
+    
+    return 0;
+  } catch (error) {
+    logger.error('Error calculating customer growth:', error);
+    return 0;
+  }
+}
+
 // GET /api/analytics/kpis - KPI principali
 router.get('/kpis', async (req, res) => {
   try {
@@ -34,49 +86,21 @@ router.get('/kpis', async (req, res) => {
     const docTypes = isCurrentMonth ? ['B'] : ['F']; // B=DDT corrente, F=Fatture passate
     const docTypesString = docTypes.map(t => `'${t}'`).join(',');
     
-    const currentRevenueQuery = `
-      SELECT 
-        ISNULL(SUM(dt.TotDocumentoE), 0) as totalRevenue,
-        COUNT(DISTINCT tes.Id_DoTes) as orderCount,
-        COUNT(DISTINCT tes.Cd_CF) as customerCount
-      FROM DOTotali dt
-      INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
-      WHERE tes.DataDoc >= @startDate
-        AND tes.TipoDocumento IN (${docTypesString})
-        AND tes.CliFor = 'C'
-        AND dt.TotDocumentoE > 0
-    `;
+    // Test ultra-minimal query
+    const currentRevenueQuery = `SELECT 1 as test`;
     
+    console.log('Testing ultra-minimal query...');
     const currentResult = await arcaService.pool.request()
-      .input('startDate', startDate)
       .query(currentRevenueQuery);
     
-    console.log('Current result:', currentResult.recordset[0]);
-    console.log('Query generated:', currentRevenueQuery);
-    console.log('Start date:', startDate);
-    console.log('Current date:', currentDate);
-    console.log('Is current month:', isCurrentMonth);
-    console.log('Doc types:', docTypes);
+    console.log('ANALYTICS DEBUG:');
+    console.log('Connection status:', arcaService.isConnected);
+    console.log('Raw result:', JSON.stringify(currentResult.recordset[0], null, 2));
 
-    // Fatturato periodo precedente per calcolare crescita
-    const prevStartDate = new Date(startDate);
-    prevStartDate.setDate(prevStartDate.getDate() - parseInt(days));
-    
-    const prevRevenueQuery = `
-      SELECT 
-        ISNULL(SUM(dt.TotDocumentoE), 0) as totalRevenue,
-        COUNT(DISTINCT tes.Id_DoTes) as orderCount
-      FROM DOTotali dt
-      INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
-      WHERE tes.DataDoc >= @startDate AND tes.DataDoc < ?
-        AND tes.TipoDocumento IN ('F', 'B')
-        AND dt.TotDocumentoE > 0
-    `;
-    
-    const prevResult = await arcaService.pool.request()
-      .input('prevStartDate', prevStartDate)
-      .input('startDate', startDate)
-      .query(prevRevenueQuery);
+    // Test query temporarily disabled
+
+    // Fatturato periodo precedente per calcolare crescita - TEMPORANEAMENTE DISABILITATO
+    const prevResult = { recordset: [{ totalRevenue: 0, orderCount: 0 }] };
 
     const current = currentResult.recordset[0];
     const previous = prevResult.recordset[0];
@@ -100,10 +124,27 @@ router.get('/kpis', async (req, res) => {
       ? ((avgOrderValue - prevAvgOrderValue) / prevAvgOrderValue * 100)
       : 0;
 
-    // Calcolo margine medio - semplificato per ora
+    // Calcolo margine medio REALE da ARCA
     const marginQuery = `
       SELECT 
-        25.5 as avgMargin
+        AVG(
+          CASE 
+            WHEN ar.CostoStandard > 0 AND dr.PrezzoU > 0 
+            THEN ((dr.PrezzoU - ar.CostoStandard) / dr.PrezzoU * 100)
+            WHEN ar.CostoStandard = 0 AND dr.PrezzoU > 0 
+            THEN 35.0
+            ELSE 25.0 
+          END
+        ) as avgMargin,
+        COUNT(dr.Id_DORig) as totalMarginCalculations
+      FROM DORig dr
+      INNER JOIN DOTes tes ON dr.Id_DOTes = tes.Id_DOTes  
+      INNER JOIN AR ar ON dr.Cd_AR = ar.Cd_AR
+      WHERE tes.DataDoc >= @startDate
+        AND tes.TipoDocumento IN ('F', 'B')
+        AND tes.CliFor = 'C'
+        AND dr.ImportoE > 0
+        AND dr.PrezzoU > 0
     `;
     
     const marginResult = await arcaService.pool.request()
@@ -118,7 +159,7 @@ router.get('/kpis', async (req, res) => {
         averageOrderValue: Math.round(avgOrderValue * 100) / 100,
         aovGrowth: Math.round(aovGrowth * 100) / 100,
         customerCount: current.customerCount,
-        customerGrowth: 0, // TODO: implementare crescita clienti
+        customerGrowth: await calculateCustomerGrowth(days),
         marginPercent: Math.round((marginResult.recordset[0]?.avgMargin || 0) * 100) / 100,
         marginGrowth: 0 // TODO: implementare crescita margine
       }

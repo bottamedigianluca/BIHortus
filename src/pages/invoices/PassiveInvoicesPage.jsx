@@ -36,7 +36,7 @@ export default function PassiveInvoicesPage() {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/arca/passive-invoices');
+      const response = await fetch('/api/invoices/passive');
       if (response.ok) {
         const data = await response.json();
         setInvoices(data);

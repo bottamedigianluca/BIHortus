@@ -29,24 +29,87 @@ router.get('/', async (req, res) => {
         
         customers = await arcaService.getClienti(filters);
         
-        // Enrich data with business logic
-        const enrichedCustomers = customers.map(customer => ({
-          id: customer.Cd_CF,
-          code: customer.Cd_CF,
-          name: customer.Descrizione,
-          type: determineCustomerType(customer.Descrizione),
-          category: customer.Categoria_cliente || 'B',
-          email: customer.Email || generateEmail(customer.Descrizione),
-          phone: customer.Telefono || generatePhone(),
-          address: buildAddress(customer),
-          vatNumber: customer.PartitaIva,
-          creditLimit: customer.Fido || 0,
-          scadenzeAperte: customer.ScadenzeAperte || 0,
-          esposizioneTotale: customer.EsposizioneTotale || 0,
-          scaduto: customer.Scaduto || 0,
-          agente: customer.Agente,
-          since: '2020-01-01',
-          paymentTerms: 30
+        // Enrich data with REAL business calculations from ARCA
+        const enrichedCustomers = await Promise.all(customers.map(async (customer) => {
+          // Calculate real total revenue for customer
+          const revenueQuery = `
+            SELECT 
+              ISNULL(SUM(dt.TotDocumentoE), 0) as totalRevenue,
+              COUNT(DISTINCT tes.Id_DoTes) as totalOrders,
+              MAX(tes.DataDoc) as lastOrderDate,
+              MIN(tes.DataDoc) as firstOrderDate
+            FROM DOTotali dt
+            INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
+            WHERE tes.Cd_CF = @customerCode
+              AND tes.TipoDocumento IN ('F', 'B')
+              AND tes.CliFor = 'C'
+              AND dt.TotDocumentoE > 0
+          `;
+
+          const revenueResult = await arcaService.pool.request()
+            .input('customerCode', customer.Cd_CF)
+            .query(revenueQuery);
+
+          // Calculate credit score based on payment history
+          const creditQuery = `
+            SELECT 
+              COUNT(*) as totalInvoices,
+              COUNT(CASE WHEN sc.Pagata = 1 THEN 1 END) as paidInvoices,
+              COUNT(CASE WHEN sc.Pagata = 0 AND sc.DataScadenza < GETDATE() THEN 1 END) as overdueInvoices,
+              AVG(CASE WHEN sc.Pagata = 1 AND sc.DataPagamento IS NOT NULL 
+                  THEN DATEDIFF(day, sc.DataScadenza, sc.DataPagamento) 
+                  ELSE NULL END) as avgPaymentDelay,
+              SUM(CASE WHEN sc.Pagata = 0 THEN sc.ImportoE ELSE 0 END) as openAmount
+            FROM SC sc
+            WHERE sc.Cd_CF = @customerCode
+              AND sc.ImportoE > 0
+          `;
+
+          const creditResult = await arcaService.pool.request()
+            .input('customerCode', customer.Cd_CF)
+            .query(creditQuery);
+
+          const revenue = revenueResult.recordset[0];
+          const credit = creditResult.recordset[0];
+
+          // Calculate intelligent credit score (0-100)
+          let creditScore = 50; // Base score
+          if (credit.totalInvoices > 0) {
+            const paymentRate = (credit.paidInvoices / credit.totalInvoices) * 100;
+            creditScore += (paymentRate - 50) * 0.5; // +25 for 100% payment rate
+            
+            if (credit.avgPaymentDelay !== null) {
+              creditScore -= Math.max(0, credit.avgPaymentDelay * 2); // -2 points per day delay
+            }
+            
+            if (credit.overdueInvoices > 0) {
+              creditScore -= credit.overdueInvoices * 5; // -5 points per overdue invoice
+            }
+          }
+          creditScore = Math.max(0, Math.min(100, Math.round(creditScore)));
+
+          return {
+            id: customer.Cd_CF,
+            code: customer.Cd_CF,
+            name: customer.Descrizione,
+            type: determineCustomerType(customer.Descrizione),
+            category: customer.Categoria_cliente || 'Standard',
+            email: customer.Email || null,
+            phone: customer.Telefono || null,
+            address: buildAddress(customer),
+            vatNumber: customer.PartitaIva,
+            creditLimit: customer.Fido || 0,
+            totalRevenue: revenue.totalRevenue || 0,
+            totalOrders: revenue.totalOrders || 0,
+            lastOrderDate: revenue.lastOrderDate ? new Date(revenue.lastOrderDate).toISOString().split('T')[0] : null,
+            firstOrderDate: revenue.firstOrderDate ? new Date(revenue.firstOrderDate).toISOString().split('T')[0] : null,
+            creditScore: creditScore,
+            openAmount: credit.openAmount || 0,
+            overdueInvoices: credit.overdueInvoices || 0,
+            paymentDelay: credit.avgPaymentDelay || 0,
+            since: revenue.firstOrderDate ? new Date(revenue.firstOrderDate).getFullYear().toString() : '2020',
+            status: credit.openAmount > 0 ? (credit.overdueInvoices > 0 ? 'Overdue' : 'Active') : 'Paid'
+          };
         }));
         
         logger.info(`✅ Retrieved ${enrichedCustomers.length} customers from ARCA`);

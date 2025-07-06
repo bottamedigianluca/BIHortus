@@ -10,6 +10,8 @@ const arcaService = require('../services/database/arca');
 const cloudSyncService = require('../services/sync/cloud-sync');
 const reconciliationService = require('../services/banking/reconciliation');
 const { logger, logUtils } = require('../utils/logger');
+const { cacheMiddleware, addCacheRoutes, warmCache } = require('../middleware/cache');
+const nightlyETL = require('../services/etl/nightly-etl');
 
 // Routes
 const dashboardRoutes = require('./routes/dashboard');
@@ -22,6 +24,7 @@ const activitiesRoutes = require('./routes/activities');
 const arcaRoutes = require('./routes/arca');
 const customersRoutes = require('./routes/customers');
 const invoicesRoutes = require('./routes/invoices');
+const productsRoutes = require('./routes/products');
 const settingsRoutes = require('./routes/settings');
 
 const app = express();
@@ -84,6 +87,9 @@ app.get('/api/health', async (req, res) => {
 });
 
 // API Routes
+// Apply intelligent caching to all API routes
+app.use('/api', cacheMiddleware());
+
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reconciliation', reconciliationRoutes);
 app.use('/api/analytics', analyticsRoutes);
@@ -94,7 +100,35 @@ app.use('/api/activities', activitiesRoutes);
 app.use('/api/arca', arcaRoutes);
 app.use('/api/customers', customersRoutes);
 app.use('/api/invoices', invoicesRoutes);
+app.use('/api/products', productsRoutes);
 app.use('/api/settings', settingsRoutes);
+
+// Add cache management routes
+addCacheRoutes(app);
+
+// ETL management routes
+app.get('/api/etl/status', (req, res) => {
+  res.json({
+    success: true,
+    data: nightlyETL.getStatus()
+  });
+});
+
+app.post('/api/etl/run', async (req, res) => {
+  try {
+    await nightlyETL.runETL();
+    res.json({
+      success: true,
+      message: 'ETL process completed successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'ETL process failed',
+      details: error.message
+    });
+  }
+});
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
@@ -220,10 +254,21 @@ async function startServer() {
     }
     
     // Start server
-    server.listen(PORT, () => {
+    server.listen(PORT, async () => {
       logger.info(`🌟 BiHortus server running on port ${PORT}`);
       logger.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info(`🔗 Health check: http://localhost:${PORT}/api/health`);
+      
+      // Initialize background services
+      setTimeout(async () => {
+        if (arcaService.isConnected) {
+          // Start nightly ETL scheduler
+          nightlyETL.start();
+          
+          // Warm cache for critical endpoints
+          await warmCache();
+        }
+      }, 5000); // Wait 5 seconds for server to be fully ready
     });
     
   } catch (error) {

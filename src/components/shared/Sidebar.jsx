@@ -50,6 +50,9 @@ const SidebarItem = ({ icon, label, href, badge, isActive, ...props }) => (
           color: isActive ? 'white' : 'gray.800'
         }}
         transition="all 0.2s"
+        minH="44px"
+        align="center"
+        justify="flex-start"
       >
         <Icon as={icon} boxSize={5} />
         <Text fontSize="sm" fontWeight="500" flex="1">
@@ -62,6 +65,8 @@ const SidebarItem = ({ icon, label, href, badge, isActive, ...props }) => (
             px={2}
             py={1}
             fontSize="xs"
+            ml={2}
+            flexShrink={0}
           >
             {badge.text}
           </Badge>
@@ -138,13 +143,16 @@ const Sidebar = () => {
       position="fixed"
       left={0}
       top={0}
-      w={60}
+      w="240px"
+      minW="240px"
+      maxW="240px"
       h="100vh"
       bg="white"
       borderRight="1px solid"
       borderColor="gray.200"
       boxShadow="sm"
       zIndex={1000}
+      overflow="hidden"
     >
       <VStack spacing={0} align="stretch" h="full">
         {/* Logo */}
@@ -199,6 +207,7 @@ const Sidebar = () => {
               icon={item.icon}
               label={item.label}
               href={item.href}
+              badge={item.badge}
               isActive={location.pathname === item.href}
             />
           ))}

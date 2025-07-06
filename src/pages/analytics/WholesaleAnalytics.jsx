@@ -117,54 +117,7 @@ const WholesaleAnalytics = () => {
   const warningColor = useColorModeValue('orange.500', 'orange.400');
   const errorColor = useColorModeValue('red.500', 'red.400');
 
-  useEffect(() => {
-    fetchAnalyticsData();
-  }, [dateRange]);
-
-  const fetchAnalyticsData = async () => {
-    try {
-      setLoading(true);
-      
-      // Fetch real analytics data from API
-      const [kpisResponse, categoriesResponse, productsResponse, customersResponse] = await Promise.all([
-        fetch(`/api/analytics/kpis?days=${dateRange.replace('days', '')}`),
-        fetch(`/api/analytics/categories?days=${dateRange.replace('days', '')}`),
-        fetch(`/api/analytics/products?days=${dateRange.replace('days', '')}`),
-        fetch(`/api/analytics/customers?days=${dateRange.replace('days', '')}`)
-      ]);
-
-      const kpis = await kpisResponse.json();
-      const categories = await categoriesResponse.json();
-      const products = await productsResponse.json();
-      const customers = await customersResponse.json();
-
-      const data = {
-        kpis: kpis.data || {
-          totalRevenue: 0,
-          revenueGrowth: 0,
-          averageOrderValue: 0,
-          aovGrowth: 0,
-          customerCount: 0,
-          customerGrowth: 0,
-          marginPercent: 0,
-          marginGrowth: 0
-        },
-        revenueByPeriod: await fetchRevenueData(),
-        salesByCategory: categories.data || [],
-        topProducts: products.data || [],
-        customerAnalytics: customers.data || [],
-        seasonalTrends: await fetchSeasonalTrends(),
-        performanceMetrics: await fetchPerformanceMetrics()
-      };
-      
-      setAnalyticsData(data);
-    } catch (error) {
-      console.error('Error fetching analytics:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Helper functions
   const fetchRevenueData = async () => {
     try {
       const response = await fetch(`/api/analytics/revenue-trends?days=${dateRange.replace('days', '')}`);
@@ -217,6 +170,60 @@ const WholesaleAnalytics = () => {
       };
     }
   };
+
+  useEffect(() => {
+    fetchAnalyticsData();
+  }, [dateRange]);
+
+  const fetchAnalyticsData = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch real analytics data from API
+      const [kpisResponse, categoriesResponse, productsResponse, customersResponse] = await Promise.all([
+        fetch(`/api/analytics/kpis?days=${dateRange.replace('days', '')}`),
+        fetch(`/api/analytics/categories?days=${dateRange.replace('days', '')}`),
+        fetch(`/api/analytics/products?days=${dateRange.replace('days', '')}`),
+        fetch(`/api/analytics/customers?days=${dateRange.replace('days', '')}`)
+      ]);
+
+      const kpis = await kpisResponse.json();
+      const categories = await categoriesResponse.json();
+      const products = await productsResponse.json();
+      const customers = await customersResponse.json();
+
+      // Fetch additional data
+      const revenueData = await fetchRevenueData();
+      const seasonalData = await fetchSeasonalTrends();
+      const performanceData = await fetchPerformanceMetrics();
+
+      const data = {
+        kpis: kpis.data || {
+          totalRevenue: 0,
+          revenueGrowth: 0,
+          averageOrderValue: 0,
+          aovGrowth: 0,
+          customerCount: 0,
+          customerGrowth: 0,
+          marginPercent: 0,
+          marginGrowth: 0
+        },
+        revenueByPeriod: revenueData,
+        salesByCategory: categories.data || [],
+        topProducts: products.data || [],
+        customerAnalytics: customers.data || [],
+        seasonalTrends: seasonalData,
+        performanceMetrics: performanceData
+      };
+      
+      setAnalyticsData(data);
+    } catch (error) {
+      console.error('Error fetching analytics:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('it-IT', {
