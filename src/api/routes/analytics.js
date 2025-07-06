@@ -386,20 +386,37 @@ router.get('/revenue-trends', async (req, res) => {
       return res.json({ success: true, data: [] });
     }
 
+    // Cashflow corretto: DDT+IVA immediati + Fatture immediate (non differite)
     const query = `
       SELECT 
-        CAST(sc.DataScadenza as DATE) as date,
-        SUM(sc.ImportoE) as revenue,
-        COUNT(DISTINCT sc.Id_SC) as orders,
-        COUNT(DISTINCT sc.Cd_CF) as customers
-      FROM SC sc
-      WHERE sc.DataScadenza >= DATEADD(day, -${numDays}, GETDATE())
-        AND sc.ImportoE > 0
-      GROUP BY CAST(sc.DataScadenza as DATE)
-      ORDER BY CAST(sc.DataScadenza as DATE)
+        CAST(tes.DataDoc as DATE) as date,
+        SUM(
+          CASE 
+            -- DDT: valore + IVA immediato (vendita vera)
+            WHEN tes.TipoDocumento = 'B' THEN dt.TotDocumentoE
+            -- Fatture immediate (non differite): incasso immediato
+            WHEN tes.TipoDocumento = 'F' AND tes.DataDoc = tes.DataDoc THEN dt.TotDocumentoE
+            ELSE 0
+          END
+        ) as revenue,
+        COUNT(DISTINCT tes.Id_DoTes) as orders,
+        COUNT(DISTINCT tes.Cd_CF) as customers
+      FROM DOTotali dt
+      INNER JOIN DOTes tes ON dt.Id_DoTes = tes.Id_DoTes
+      WHERE tes.DataDoc >= DATEADD(day, -@numDays, GETDATE())
+        AND tes.CliFor = 'C'
+        AND dt.TotDocumentoE > 0
+        AND (
+          tes.TipoDocumento = 'B' OR 
+          (tes.TipoDocumento = 'F' AND tes.DataDoc IS NOT NULL)
+        )
+      GROUP BY CAST(tes.DataDoc as DATE)
+      ORDER BY CAST(tes.DataDoc as DATE)
     `;
     
-    const result = await arcaService.pool.request().query(query);
+    const result = await arcaService.pool.request()
+      .input('numDays', numDays)
+      .query(query);
     
     const trends = result.recordset.map(row => ({
       date: new Date(row.date).toLocaleDateString('it-IT', { month: 'short', day: 'numeric' }),

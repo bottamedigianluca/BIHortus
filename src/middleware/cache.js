@@ -131,6 +131,15 @@ const cacheMiddleware = (customTTL = null) => {
     // Override res.json to cache the response
     const originalJson = res.json;
     res.json = function(data) {
+      // Add no-cache headers for development
+      if (process.env.NODE_ENV === 'development') {
+        res.set({
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        });
+      }
+      
       // Only cache successful responses
       if (res.statusCode === 200 && data.success !== false) {
         cache.set(cacheKey, data, ttl);
